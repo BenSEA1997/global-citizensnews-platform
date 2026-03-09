@@ -3,6 +3,24 @@ import requests
 import plotly.express as px
 import pandas as pd
 
+# ===== 強化搜尋框外觀（CSS） =====
+st.markdown("""
+<style>
+    .stTextInput > div > div > input {
+        border: 2px solid #4CAF50 !important;
+        border-radius: 8px !important;
+        padding: 10px !important;
+        font-size: 16px !important;
+    }
+    .stTextInput > div > label {
+        font-size: 18px !important;
+        color: #333 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
+
 # ===== 右上角語言切換 =====
 col1, col2 = st.columns([8, 1])
 with col2:
@@ -10,134 +28,81 @@ with col2:
         "Language / 語言",
         ["English", "中文"],
         index=0,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key="lang_switch"
     )
 
 # ===== 語言文字設定 =====
 if interface_lang == "English":
-    page_title = "Global Real-time News Explorer"
+    page_title = "Global Real-time News Search"
     search_label = "Search location or event"
-    search_button = "Search News"
+    search_placeholder = "e.g. Tehran Iran, Tokyo Ueno Park"
+    search_button = "Search"
     loading_text = "Fetching news..."
     no_results = "No news found. Try other keywords."
-    error_timeout = "Connection timed out. Please check network or VPN."
-    error_api = "API Error"
-    x_section_title = "Real-time Eyewitness Info (X / Twitter)"
-    x_section_note = "(This feature requires an X API Key, approx. $0.005 per post)"
-    x_section_info = "If you have an X API Key, I can help integrate it!"
-    map_title = "🌍 Global Event Map"
-    map_click_tip = "Click a country to see hot news (10 headlines with date, source, link)"
+    error_timeout = "Connection timed out. Check network or VPN."
+    error_generic = "An error occurred"
+    map_title = "🌍 Global Hot News Map"
+    map_click_tip = "Click a country to see top 10 news"
 else:
-    page_title = "全球即時新聞探索器"
+    page_title = "全球即時新聞搜尋"
     search_label = "搜尋地點或事件"
+    search_placeholder = "例如：伊朗德黑蘭、東京上野公園"
     search_button = "開始搜尋"
     loading_text = "正在抓取新聞..."
     no_results = "沒有找到新聞，請試其他關鍵字"
     error_timeout = "連接超時，請檢查網路或 VPN"
-    error_api = "API 錯誤"
-    x_section_title = "社交媒體目擊者即時資訊（X）"
-    x_section_note = "（這部分目前需要 X API Key，單篇貼文約 0.005 美元）"
-    x_section_info = "如果你有 X API Key，我可以再給你完整程式碼加入這裡！"
-    map_title = "🌍 全球事件地圖"
-    map_click_tip = "點擊國家查看熱門新聞（10 條標題、日期、來源、連結）"
-
-st.set_page_config(page_title=page_title, page_icon="🌍", layout="wide")
-
-# ===== 美工背景 =====
-st.markdown("""
-<style>
-.stApp {
-    background-color: #f0f2f6;
-}
-</style>
-""", unsafe_allow_html=True)
+    error_generic = "發生錯誤"
+    map_title = "🌍 全球熱門新聞地圖"
+    map_click_tip = "點擊國家查看前 10 條新聞"
 
 st.title(f"🌍 {page_title}")
 
-# ===== 上半部：新聞搜尋 + X 社交提示 =====
-query = st.text_input(search_label, "Tehran Iran" if interface_lang == "English" else "伊朗德黑蘭")
+# ===== 搜尋區塊 =====
+query = st.text_input(
+    search_label,
+    placeholder=search_placeholder,
+    help="可輸入多個關鍵字，例如 Iran China US 或 Iran OR China OR US"
+)
+
+# 使用 session_state 保存搜尋結果（避免閃退）
+if 'search_results' not in st.session_state:
+    st.session_state.search_results = None
 
 if st.button(search_button):
     if not query:
-        st.error("Please enter keywords" if interface_lang == "English" else "請輸入關鍵字")
+        st.error("請輸入關鍵字" if interface_lang == "中文" else "Please enter keywords")
     else:
         st.info(loading_text)
         try:
+            api_key = st.secrets["NEWS_API_KEY"]  # 確保從 secrets 讀取
             url = f"https://newsdata.io/api/1/news?apikey={api_key}&q={query}&size=10"
             response = requests.get(url, timeout=15)
             if response.status_code == 200:
                 data = response.json()
-                articles = data.get("results", [])
-                st.subheader("📰 Search Results" if interface_lang == "English" else "📰 搜尋結果")
-                if not articles:
-                    st.warning(no_results)
-                for article in articles:
-                    st.write(f"**{article.get('title', 'No title')}**")
-                    st.write(article.get('description', 'No description'))
-                    st.write(f"Source: {article.get('source_id', 'Unknown')} | Time: {article.get('pubDate', 'Unknown')}")
-                    st.write(f"[Read full article]({article.get('link', '#')})")
-                    st.divider()
+                st.session_state.search_results = data.get("results", [])
             else:
-                st.error(f"{error_api}: {response.status_code} - {response.text}")
-        except requests.exceptions.Timeout:
-            st.error(error_timeout)
+                st.error(f"API 錯誤：{response.status_code} - {response.text}")
+                st.session_state.search_results = None
         except Exception as e:
-            st.error(f"Other error: {str(e)}")
+            st.error(f"{error_generic}: {str(e)}")
+            st.session_state.search_results = None
 
-st.subheader(x_section_title)
-st.write(x_section_note)
-st.info(x_section_info)
-
-st.divider()
-
-# ===== 下半部：世界地圖 + 點擊顯示國家新聞 =====
-st.subheader(map_title)
-st.caption(map_click_tip)
-
-# 地圖使用 Plotly choropleth（國家單位，顏色深淺代表熱度）
-country_news = {
-    'USA': 25, 'IRN': 15, 'CHN': 20, 'JPN': 10, 'RUS': 18, 'ISR': 12, 'UKR': 22, 'FRA': 8, 'DEU': 9, 'GBR': 11
-}  # 假熱度數據（之後可從 API 動態計算）
-
-df = pd.DataFrame(list(country_news.items()), columns=['iso_alpha', 'news_count'])
-
-fig = px.choropleth(
-    df,
-    locations="iso_alpha",
-    color="news_count",
-    hover_name="iso_alpha",
-    color_continuous_scale="Reds",
-    title="Global Hot News Intensity by Country (Click a country to see news)"
-)
-
-fig.update_layout(
-    geo=dict(showframe=False, showcoastlines=True),
-    margin={"r":0,"t":0,"l":0,"b":0}
-)
-
-# 顯示地圖並捕捉點擊
-clicked_country = st.plotly_chart(fig, use_container_width=True, on_select="rerun")
-
-# 如果點擊國家，顯示新聞
-if clicked_country and 'points' in clicked_country and clicked_country['points']:
-    selected_country = clicked_country['points'][0]['location']  # iso_alpha
-    st.subheader(f"Hot News in {selected_country}")
-    try:
-        country_url = f"https://newsdata.io/api/1/news?apikey={api_key}&country={selected_country.lower()}&size=10"
-        response = requests.get(country_url, timeout=15)
-        if response.status_code == 200:
-            data = response.json()
-            articles = data.get("results", [])
-            if not articles:
-                st.warning("No news for this country.")
-            for article in articles:
-                st.write(f"**{article.get('title', 'No title')}**")
-                st.write(f"Source: {article.get('source_id', 'Unknown')} | Time: {article.get('pubDate', 'Unknown')}")
-                st.write(f"[Read full article]({article.get('link', '#')})")
-                st.divider()
-        else:
-            st.error(f"{error_api}: {response.status_code}")
-    except Exception as e:
-        st.error(f"Other error: {str(e)}")
-
-st.success("Platform prototype running successfully")
+# 顯示搜尋結果（持久顯示）
+if st.session_state.search_results is not None:
+    articles = st.session_state.search_results
+    st.subheader("搜尋結果" if interface_lang == "中文" else "Search Results")
+    if not articles:
+        st.warning(no_results)
+    else:
+        for article in articles:
+            title = article.get('title', '無標題' if interface_lang == "中文" else 'No title')
+            desc = article.get('description', '無描述' if interface_lang == "中文" else 'No description')
+            source = article.get('source_id', '未知' if interface_lang == "中文" else 'Unknown')
+            pub = article.get('pubDate', '未知' if interface_lang == "中文" else 'Unknown')
+            link = article.get('link', '#')
+            st.markdown(f"**{title}**")
+            st.write(desc)
+            st.caption(f"{source} | {pub}")
+            st.markdown(f"[閱讀全文 / Read full article]({link})")
+            st.divider()
