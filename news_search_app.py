@@ -1,73 +1,94 @@
 import streamlit as st
 import requests
 
-# 測試版標題（放在 import 後面）
-st.markdown("**測試版 v0.1 – 全球新聞探索與公民記者平台** 歡迎反饋！")
+# 右上方語言切換（使用 columns 讓它靠右）
+col1, col2 = st.columns([6, 1])
+with col2:
+    interface_lang = st.selectbox(
+        "Language / 語言",
+        ["English", "中文"],
+        index=0,
+        label_visibility="collapsed",
+        key="lang_switch"
+    )
 
-st.set_page_config(page_title="全球即時目擊新聞搜尋器", page_icon="🌍")
-st.title("🌍 全球即時目擊新聞搜尋器")
-st.write("輸入地點或事件，例如：伊朗德黑蘭、東京上野公園櫻花")
-
-query = st.text_input("搜尋關鍵字", "東京上野公園櫻花")
-
-# 語言選擇下拉選單
-language_option = st.selectbox(
-    "選擇語言範圍",
-    options=[
-        "全部語言（最多結果）",
-        "中文 + 英文",
-        "只中文（簡繁皆可）",
-        "只英文"
-    ],
-    index=0  # 預設全部語言
-)
-
-# 根據選擇設定 language 參數
-if language_option == "全部語言（最多結果）":
-    lang_param = ""
-elif language_option == "中文 + 英文":
-    lang_param = "&language=zh,en"
-elif language_option == "只中文（簡繁皆可）":
-    lang_param = "&language=zh"
-elif language_option == "只英文":
-    lang_param = "&language=en"
+# 根據語言設定所有顯示文字
+if interface_lang == "English":
+    page_title = "Global Real-time News Explorer"
+    page_desc = "Enter location or event, e.g. Tehran Iran, Tokyo Ueno Park cherry blossoms"
+    search_label = "Search Keywords"
+    search_placeholder = "Tehran Iran"
+    search_button = "Search"
+    loading_text = "Fetching news from credible sources (NewsData.io)..."
+    no_results = "No related news found. Try other keywords."
+    error_timeout = "Connection timed out. Please check your network or VPN."
+    error_api = "API Error"
+    x_section_title = "Real-time Eyewitness Info (X / Twitter)"
+    x_section_note = "(This feature requires an X API Key, approx. $0.005 per post)"
+    x_section_info = "If you have an X API Key, I can help integrate it!"
+    success_text = "Search completed!"
 else:
-    lang_param = ""
+    page_title = "全球即時目擊新聞搜尋器"
+    page_desc = "輸入地點或事件，例如：伊朗德黑蘭、東京上野公園櫻花"
+    search_label = "搜尋關鍵字"
+    search_placeholder = "伊朗德黑蘭"
+    search_button = "開始搜尋"
+    loading_text = "正在抓取傳統新聞媒體（使用 NewsData.io）..."
+    no_results = "沒有找到相關新聞，請試其他關鍵字或英文查詢"
+    error_timeout = "連接超時，請檢查網路或 VPN"
+    error_api = "API 錯誤"
+    x_section_title = "社交媒體目擊者即時資訊（X）"
+    x_section_note = "（這部分目前需要 X API Key，單篇貼文約 0.005 美元）"
+    x_section_info = "如果你有 X API Key，我可以再給你完整程式碼加入這裡！"
+    success_text = "✅ 搜尋完成！這就是你的新聞搜尋器原型"
 
-if st.button("開始搜尋"):
+st.set_page_config(page_title=page_title, page_icon="🌍")
+st.title(f"🌍 {page_title}")
+st.write(page_desc)
+
+query = st.text_input(search_label, search_placeholder)
+
+if st.button(search_button):
     if not query:
-        st.error("請輸入關鍵字")
+        st.error("Please enter keywords" if interface_lang == "English" else "請輸入關鍵字")
     else:
-        st.info("正在抓取傳統新聞媒體（使用 NewsData.io）...")
+        st.info(loading_text)
         
-        # api_key 建議改用 secrets（見下面說明）
-        api_key = "pub_ea6292c128e7496da2492cf0de092565"  # 你的真實 Key
+        # 從 Streamlit Secrets 讀取 API Key（安全）
+        api_key = st.secrets.get("NEWS_API_KEY", "your-key-here-if-not-set")
         
-        url = f"https://newsdata.io/api/1/news?apikey={api_key}&q={query}{lang_param}&size=10"
+        # 不再限制語言，讓 API 依關鍵字自然返回相關結果
+        url = f"https://newsdata.io/api/1/news?apikey={api_key}&q={query}&size=10"
         
         try:
             response = requests.get(url, timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 articles = data.get("results", [])
-                st.subheader("📰 傳統公信力媒體報導")
+                st.subheader("📰 Credible Media Reports" if interface_lang == "English" else "📰 傳統公信力媒體報導")
                 if not articles:
-                    st.warning("沒有找到相關新聞，請試其他關鍵字或英文查詢")
+                    st.warning(no_results)
                 for article in articles:
-                    st.write(f"**{article.get('title', '無標題')}**")
-                    st.write(article.get('description', '無描述'))
-                    st.write(f"來源：{article.get('source_id', '未知')} | 時間：{article.get('pubDate', '未知')}")
-                    st.write(f"[閱讀全文]({article.get('link', '#')})")
+                    title = article.get('title', 'No title' if interface_lang == "English" else '無標題')
+                    desc = article.get('description', 'No description' if interface_lang == "English" else '無描述')
+                    source = article.get('source_id', 'Unknown' if interface_lang == "English" else '未知')
+                    pub_date = article.get('pubDate', 'Unknown' if interface_lang == "English" else '未知')
+                    link = article.get('link', '#')
+                    
+                    st.write(f"**{title}**")
+                    st.write(desc)
+                    st.write(f"Source: {source} | Time: {pub_date}")
+                    st.write(f"[Read full article]({link})")
                     st.divider()
             else:
-                st.error(f"API 錯誤：{response.status_code} - {response.text}")
+                st.error(f"{error_api}: {response.status_code} - {response.text}")
         except requests.exceptions.Timeout:
-            st.error("連接超時，請檢查網路或 VPN")
+            st.error(error_timeout)
         except Exception as e:
-            st.error(f"其他錯誤：{str(e)}")
+            st.error(f"Other error: {str(e)}")
         
-        st.subheader("📱 社交媒體目擊者即時資訊（X）")
-        st.write("（這部分目前需要 X API Key，單篇貼文約 0.005 美元，適合少量使用）")
-        st.info("如果你有 X API Key，我可以再給你完整程式碼加入這裡！")
+        st.subheader(x_section_title)
+        st.write(x_section_note)
+        st.info(x_section_info)
         
-        st.success("✅ 完成！這就是你的新聞搜尋器原型")
+        st.success(success_text)
