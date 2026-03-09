@@ -1,3 +1,4 @@
 streamlit
 requests
-# 如果你加了其他套件如 pandas、plotly 等，也加進來
+folium
+streamlit-folium
