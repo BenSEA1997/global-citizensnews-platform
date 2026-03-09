@@ -92,3 +92,4 @@ if st.button(search_button):
         st.info(x_section_info)
         
         st.success(success_text)
+        # Updated for English default + language switch - 2026-03-08
