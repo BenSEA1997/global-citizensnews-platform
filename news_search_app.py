@@ -1,7 +1,8 @@
-
-st.markdown("**測試版 v0.1 – 全球新聞捜索與公民記者平台** 歡迎反饋！")
 import streamlit as st
 import requests
+
+# 測試版標題（放在 import 後面）
+st.markdown("**測試版 v0.1 – 全球新聞探索與公民記者平台** 歡迎反饋！")
 
 st.set_page_config(page_title="全球即時目擊新聞搜尋器", page_icon="🌍")
 st.title("🌍 全球即時目擊新聞搜尋器")
@@ -39,8 +40,8 @@ if st.button("開始搜尋"):
     else:
         st.info("正在抓取傳統新聞媒體（使用 NewsData.io）...")
         
-       
-        api_key = "pub_ea6292c128e7496da2492cf0de092565"  
+        # api_key 建議改用 secrets（見下面說明）
+        api_key = "pub_ea6292c128e7496da2492cf0de092565"  # 你的真實 Key
         
         url = f"https://newsdata.io/api/1/news?apikey={api_key}&q={query}{lang_param}&size=10"
         
