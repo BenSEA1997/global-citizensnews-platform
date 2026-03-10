@@ -1,27 +1,6 @@
 import streamlit as st
 import requests
-
-# ===== 美工 CSS =====
-st.markdown("""
-<style>
-    .stApp {
-        background-color: #f0f2f6;
-    }
-    .stTextInput > div > div > input {
-        border: 2px solid #4CAF50;
-        border-radius: 8px;
-        padding: 10px;
-        font-size: 16px;
-    }
-    .stButton > button {
-        background-color: #4CAF50;
-        color: white;
-    }
-    .stMarkdown h3 {
-        color: #333;
-    }
-</style>
-""", unsafe_allow_html=True)
+import re  # 加入這一行，解決 re not defined 錯誤
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
@@ -47,6 +26,7 @@ if interface_lang == "English":
     error_timeout = "Connection timed out. Check network or VPN."
     error_generic = "An error occurred"
     success_text = "Search completed!"
+    search_tip = "Tip: For names or exact phrases, use quotes e.g. \"Li Ka-shing\""
 else:
     page_title = "全球即時新聞搜尋"
     search_label = "搜尋地點或事件"
@@ -57,15 +37,12 @@ else:
     error_timeout = "連接超時，請檢查網路或 VPN"
     error_generic = "發生錯誤"
     success_text = "✅ 搜尋完成！"
+    search_tip = "提示：人名或專有名詞建議用引號包住，例如 \"李家超\" 或 \"伊朗核協議\""
 
 st.title(page_title)
 
-# ===== API Key =====
-api_key = st.secrets.get("NEWS_API_KEY", "")
-
-if not api_key:
-    st.error("API Key not set in Streamlit Secrets. Please add NEWS_API_KEY.")
-    st.stop()
+# ===== 搜尋提示 =====
+st.caption(search_tip)
 
 # ===== 搜尋區塊 =====
 query = st.text_input(search_label, placeholder=search_placeholder)
@@ -73,16 +50,21 @@ query = st.text_input(search_label, placeholder=search_placeholder)
 # 使用 session_state 保存搜尋結果
 if 'search_results' not in st.session_state:
     st.session_state.search_results = None
+if 'search_query' not in st.session_state:
+    st.session_state.search_query = ""
 
 if st.button(search_button):
     if not query:
-        st.error("Please enter keywords" if interface_lang == "English" else "請輸入關鍵字")
+        st.error("請輸入關鍵字" if interface_lang == "中文" else "Please enter keywords")
     else:
+        st.session_state.search_query = query
         st.info(loading_text)
         try:
+            api_key = st.secrets["NEWS_API_KEY"]
+            
             results = None
             
-            # 方法2：自動精準處理中文名字（偵測中文自動加引號）
+            # 自動精準處理中文名字（偵測中文自動加引號）
             precise_query = query
             if re.search(r'[\u4e00-\u9fff]', query):  # 有中文
                 precise_query = f'"{query}"'
@@ -107,23 +89,21 @@ if st.button(search_button):
             st.error(f"{error_generic}: {str(e)}")
             st.session_state.search_results = None
 
-# 顯示搜尋結果
+# 顯示搜尋結果（持久顯示）
 if st.session_state.search_results is not None:
     articles = st.session_state.search_results
-    st.subheader("Search Results / 搜尋結果")
+    st.subheader("搜尋結果" if interface_lang == "中文" else "Search Results")
     if not articles:
         st.warning(no_results)
     else:
         for article in articles:
-            title = article.get('title', 'No title' if interface_lang == "English" else '無標題')
-            desc = article.get('description', 'No description' if interface_lang == "English" else '無描述')
-            source = article.get('source_id', 'Unknown' if interface_lang == "English" else '未知')
-            pub = article.get('pubDate', 'Unknown' if interface_lang == "English" else '未知')
+            title = article.get('title', '無標題' if interface_lang == "中文" else 'No title')
+            desc = article.get('description', '無描述' if interface_lang == "中文" else 'No description')
+            source = article.get('source_id', '未知' if interface_lang == "中文" else 'Unknown')
+            pub = article.get('pubDate', '未知' if interface_lang == "中文" else 'Unknown')
             link = article.get('link', '#')
             st.markdown(f"**{title}**")
             st.write(desc)
             st.caption(f"{source} | {pub}")
-            st.markdown(f"[Read full article / 閱讀全文]({link})")
+            st.markdown(f"[閱讀全文 / Read full article]({link})")
             st.divider()
-
-st.success(success_text)
