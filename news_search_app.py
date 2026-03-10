@@ -6,6 +6,7 @@ from xml.etree import ElementTree as ET
 from urllib.parse import quote
 from dateutil import parser
 from bs4 import BeautifulSoup
+import pytz  # 用來處理時區轉換
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
@@ -58,6 +59,9 @@ else:
 st.title(page_title)
 st.caption(search_tip)
 
+# ===== 香港時區 =====
+HKT = pytz.timezone('Asia/Hong_Kong')
+
 # ===== 搜尋區塊 =====
 query = st.text_input(search_label, placeholder=search_placeholder)
 
@@ -78,7 +82,7 @@ if st.button(search_button):
             if re.search(r'[\u4e00-\u9fff]', query):
                 precise_query = f'"{query}"'
 
-            # NewsData.io 搜尋：size=10 + image=1
+            # NewsData.io 搜尋
             url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10&image=1"
             response_nd = requests.get(url_nd, timeout=15)
             if response_nd.status_code == 200:
@@ -128,22 +132,33 @@ if st.button(search_button):
                         "image_url": None
                     })
 
-            # 去重 + 排序
+            # 去重
             unique_results = {r['link']: r for r in results if r.get('link') and r['link'] != "#"}.values()
 
-            def parse_date(date_str):
+            # 解析日期並統一轉成香港時區
+            def parse_date_to_hkt(date_str):
                 if not date_str:
-                    return datetime.datetime.min
+                    return datetime.datetime.min.replace(tzinfo=HKT)
                 try:
-                    return parser.parse(date_str)
+                    dt = parser.parse(date_str)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=pytz.UTC)  # 無時區假設 UTC
+                    dt = dt.astimezone(HKT)  # 轉成香港時區
+                    return dt
                 except:
-                    return datetime.datetime.min
+                    return datetime.datetime.min.replace(tzinfo=HKT)
 
+            # 排序（最新在上）
             sorted_results = sorted(
                 unique_results,
-                key=lambda x: parse_date(x.get('pubDate', '')),
+                key=lambda x: parse_date_to_hkt(x.get('pubDate', '')),
                 reverse=True
             )
+
+            # 額外：把 pubDate 欄位也轉成香港時間字串（顯示用）
+            for r in sorted_results:
+                dt_hkt = parse_date_to_hkt(r['pubDate'])
+                r['pubDate_display'] = dt_hkt.strftime("%Y-%m-%d %H:%M:%S %Z")  # 例如 2026-03-10 20:45:30 HKT
 
             st.session_state.search_results = sorted_results
 
@@ -166,7 +181,7 @@ if st.session_state.search_results is not None:
             title = article.get('title', '無標題' if interface_lang == "中文" else 'No title')
             desc = article.get('description', '')
             source = article.get('source_id', '未知' if interface_lang == "中文" else 'Unknown')
-            pub = article.get('pubDate', '未知' if interface_lang == "中文" else 'Unknown')
+            pub = article.get('pubDate_display', article.get('pubDate', '未知' if interface_lang == "中文" else 'Unknown'))
             link = article.get('link', '#')
             img_url = article.get('image_url')
 
