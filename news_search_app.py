@@ -1,115 +1,208 @@
 import streamlit as st
 import requests
 import re
+import datetime
 from xml.etree import ElementTree as ET
 from urllib.parse import quote
 from dateutil import parser
-import datetime
+from bs4 import BeautifulSoup
+import pytz  # 用來處理時區轉換
 
-st.set_page_config(page_title="全球即時新聞搜尋", layout="wide")
+st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
-# ===== 1. 徹底清理 API Key 函數 =====
-def get_clean_key():
-    try:
-        # 從 Secrets 讀取並刪除所有空格與引號
-        raw_key = st.secrets["NEWS_API_KEY"]
-        clean_key = raw_key.strip().replace('"', '').replace("'", "")
-        return clean_key
-    except:
-        return None
-
-# ===== 2. 快取搜尋結果 (節省點數且提速) =====
-@st.cache_data(ttl=600) # 10分鐘內重複搜尋不扣點
-def fetch_all_news(query, country_code):
-    results = []
-    api_key = get_clean_key()
-    
-    if not api_key:
-        return [], "Missing API Key"
-
-    # --- NewsData.io 抓取 ---
-    try:
-        # 使用 params 字典最安全，自動處理編碼
-        nd_params = {
-            "apikey": api_key,
-            "q": query,
-            "language": "zh,en"
-        }
-        # 如果有選擇地區才加進去，否則搜全球
-        if country_code:
-            nd_params["country"] = country_code
-            
-        res_nd = requests.get("https://newsdata.io", params=nd_params, timeout=10)
-        
-        if res_nd.status_code == 200:
-            data = res_nd.json()
-            for item in data.get("results", []):
-                results.append({
-                    "title": item.get("title", "無標題"),
-                    "source": item.get("source_id", "NewsData"),
-                    "date": item.get("pubDate"),
-                    "link": item.get("link", "#"),
-                    "img": item.get("image_url")
-                })
-        else:
-            print(f"NewsData Error: {res_nd.status_code}")
-    except Exception as e:
-        print(f"NewsData Exception: {e}")
-
-    # --- Google News RSS 抓取 (備援) ---
-    try:
-        g_url = f"https://google.com{quote(query)}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
-        res_g = requests.get(g_url, timeout=10)
-        if res_g.status_code == 200 and b'<?xml' in res_g.content:
-            root = ET.fromstring(res_g.content)
-            for item in root.findall(".//item")[:10]:
-                results.append({
-                    "title": item.find("title").text,
-                    "source": "Google News",
-                    "date": item.find("pubDate").text,
-                    "link": item.find("link").text,
-                    "img": None
-                })
-    except:
-        pass
-
-    return results, None
-
-# ===== 3. UI 介面 =====
-st.title("🌍 全球即時新聞搜尋")
-
-col1, col2 = st.columns([3, 1])
-with col1:
-    query = st.text_input("輸入關鍵字", placeholder="例如：伊朗、李家超", label_visibility="collapsed")
+# ===== 右上角語言切換 =====
+col1, col2 = st.columns([8, 1])
 with col2:
-    country_options = {"全球": "", "香港": "hk", "台灣": "tw", "中國": "cn"}
-    sel_country = st.selectbox("地區", list(country_options.keys()), label_visibility="collapsed")
+    interface_lang = st.selectbox(
+        "Language / 語言",
+        ["English", "中文"],
+        index=0,
+        label_visibility="collapsed",
+        key="lang_switch"
+    )
 
-if st.button("開始搜尋", use_container_width=True):
+# ===== 地區選擇 =====
+country_options = {
+    "Global / 全球": "",
+    "Hong Kong / 香港": "hk",
+    "Taiwan / 台灣": "tw",
+    "China / 大陸": "cn"
+}
+country_label = "Select Region / 選擇地區" if interface_lang == "English" else "選擇地區 / Select Region"
+selected_country = st.selectbox(country_label, list(country_options.keys()), index=1)  # 預設香港
+country_code = country_options[selected_country]
+
+# ===== 語言文字設定 =====
+if interface_lang == "English":
+    page_title = "Global Real-time News Search"
+    search_label = "Search location or event"
+    search_placeholder = "e.g. Tehran Iran, Li Ka-shing"
+    search_button = "Search"
+    loading_text = "Fetching news..."
+    no_results = "No news found. Try other keywords."
+    error_timeout = "Connection timed out. Check network or VPN."
+    error_generic = "An error occurred"
+    success_text = "Search completed!"
+    search_tip = "Tip: For names or exact phrases, use quotes e.g. \"Li Ka-shing\""
+else:
+    page_title = "全球即時新聞搜尋"
+    search_label = "搜尋地點或事件"
+    search_placeholder = "例如：伊朗德黑蘭、李家超"
+    search_button = "開始搜尋"
+    loading_text = "正在抓取新聞..."
+    no_results = "沒有找到新聞，請試其他關鍵字"
+    error_timeout = "連接超時，請檢查網路或 VPN"
+    error_generic = "發生錯誤"
+    success_text = "✅ 搜尋完成！"
+    search_tip = "提示：人名或專有名詞建議用引號包住，例如 \"李家超\" 或 \"伊朗核協議\""
+
+st.title(page_title)
+st.caption(search_tip)
+
+# ===== 香港時區 =====
+HKT = pytz.timezone('Asia/Hong_Kong')
+
+# ===== 搜尋區塊 =====
+query = st.text_input(search_label, placeholder=search_placeholder)
+
+if 'search_results' not in st.session_state:
+    st.session_state.search_results = None
+
+if st.button(search_button):
     if not query:
-        st.error("請輸入關鍵字")
+        st.error("請輸入關鍵字" if interface_lang == "中文" else "Please enter keywords")
     else:
-        with st.spinner("正在聯動全球媒體庫..."):
-            news_list, error = fetch_all_news(query, country_options[sel_country])
-            
-            if news_list:
-                # 排序 (由新到舊)
+        st.info(loading_text)
+        try:
+            api_key = st.secrets["NEWS_API_KEY"]
+            results = []
+
+            # 自動精準處理中文名字
+            precise_query = query
+            if re.search(r'[\u4e00-\u9fff]', query):
+                precise_query = f'"{query}"'
+
+            # NewsData.io 搜尋
+            url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10&image=1"
+            response_nd = requests.get(url_nd, timeout=15)
+            if response_nd.status_code == 200:
+                data = response_nd.json()
+                for item in data.get("results", []):
+                    img_url = item.get("image_url")
+                    if not img_url or not img_url.strip():
+                        img_url = None
+
+                    desc = item.get("description") or item.get("content", "")[:300] or ""
+                    results.append({
+                        "title": item.get("title", ""),
+                        "description": desc,
+                        "source_id": item.get("source_id", "NewsData"),
+                        "pubDate": item.get("pubDate"),
+                        "link": item.get("link", "#"),
+                        "image_url": img_url
+                    })
+
+            # Google News RSS 補充
+            google_query = quote(query)
+            url_google = f"https://news.google.com/rss/search?q={google_query}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
+            response_google = requests.get(url_google, timeout=15)
+            if response_google.status_code == 200:
+                root = ET.fromstring(response_google.content)
+                for item in root.findall(".//item")[:10]:
+                    title_raw = item.find("title").text or ""
+                    link = item.find("link").text or "#"
+                    pub = item.find("pubDate").text or ""
+                    desc_raw = item.find("description").text or ""
+
+                    soup = BeautifulSoup(desc_raw, 'html.parser')
+                    if soup.find_all('a'):
+                        soup.find_all('a')[-1].decompose()
+                    clean_desc = soup.get_text(separator=' ', strip=True)[:300]
+
+                    match = re.search(r' - (.+?)(?=\s*\(|$)', title_raw)
+                    source = match.group(1).strip() if match else "Google News"
+                    title = re.sub(r' - .+$', '', title_raw).strip()
+
+                    results.append({
+                        "title": title,
+                        "description": clean_desc,
+                        "source_id": source,
+                        "pubDate": pub,
+                        "link": link,
+                        "image_url": None
+                    })
+
+            # 去重
+            unique_results = {r['link']: r for r in results if r.get('link') and r['link'] != "#"}.values()
+
+            # 解析日期並統一轉成香港時區
+            def parse_date_to_hkt(date_str):
+                if not date_str:
+                    return datetime.datetime.min.replace(tzinfo=HKT)
                 try:
-                    news_list = sorted(news_list, key=lambda x: parser.parse(x['date']), reverse=True)
+                    dt = parser.parse(date_str)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=pytz.UTC)  # 無時區假設 UTC
+                    dt = dt.astimezone(HKT)  # 轉成香港時區
+                    return dt
                 except:
-                    pass
-                
-                st.success(f"找到 {len(news_list)} 則新聞")
-                for art in news_list:
-                    c1, c2 = st.columns([1, 4])
-                    with c1:
-                        if art['img']:
-                            st.image(art['img'], use_column_width=True)
-                        else:
-                            st.image("https://placeholder.com", use_column_width=True)
-                    with c2:
-                        st.markdown(f"#### [{art['title']}]({art['link']})")
-                        st.caption(f"📍 {art['source']} | 📅 {art['date']}")
-                    st.divider()
-            else:
-                st.warning("目前搜不到結果。請嘗試：1. 縮短關鍵字 2. 切換地區為『全球』")
+                    return datetime.datetime.min.replace(tzinfo=HKT)
+
+            # 排序（最新在上）
+            sorted_results = sorted(
+                unique_results,
+                key=lambda x: parse_date_to_hkt(x.get('pubDate', '')),
+                reverse=True
+            )
+
+            # 額外：把 pubDate 欄位也轉成香港時間字串（顯示用）
+            for r in sorted_results:
+                dt_hkt = parse_date_to_hkt(r['pubDate'])
+                r['pubDate_display'] = dt_hkt.strftime("%Y-%m-%d %H:%M:%S %Z")  # 例如 2026-03-10 20:45:30 HKT
+
+            st.session_state.search_results = sorted_results
+
+        except requests.Timeout:
+            st.error(error_timeout)
+        except Exception as e:
+            st.error(f"{error_generic}: {str(e)}")
+        else:
+            st.success(success_text)
+
+# ===== 顯示搜尋結果 =====
+if st.session_state.search_results is not None:
+    articles = st.session_state.search_results
+    st.subheader("搜尋結果" if interface_lang == "中文" else "Search Results")
+
+    if not articles:
+        st.warning(no_results)
+    else:
+        for article in articles:
+            title = article.get('title', '無標題' if interface_lang == "中文" else 'No title')
+            desc = article.get('description', '')
+            source = article.get('source_id', '未知' if interface_lang == "中文" else 'Unknown')
+            pub = article.get('pubDate_display', article.get('pubDate', '未知' if interface_lang == "中文" else 'Unknown'))
+            link = article.get('link', '#')
+            img_url = article.get('image_url')
+
+            col1, col2 = st.columns([1, 5])
+            with col1:
+                if img_url:
+                    try:
+                        st.image(img_url, use_column_width=True)
+                        st.caption("真實新聞圖片")
+                    except Exception as e:
+                        st.image("https://via.placeholder.com/120?text=News+Fail", width=120)
+                        st.caption(f"圖片載入失敗: {str(e)[:50]}")
+                else:
+                    st.image("https://via.placeholder.com/120?text=No+Image", width=120)
+                    st.caption("無圖片")
+
+            with col2:
+                st.markdown(f"**{title}**")
+                if desc:
+                    st.write(desc + "..." if len(desc) > 250 else desc)
+                st.caption(f"{source} | {pub}")
+                st.markdown(f"[閱讀全文 / Read full article]({link})")
+
+            st.divider()
