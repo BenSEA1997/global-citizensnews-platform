@@ -13,11 +13,7 @@ from fake_useragent import UserAgent
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
 # 初始化工具
-try:
-    ua = UserAgent()
-except:
-    ua = None
-
+ua = UserAgent()
 HKT = pytz.timezone('Asia/Hong_Kong')
 
 # ===== 輔助函數：體感時間顯示 =====
@@ -30,10 +26,8 @@ def get_relative_time(date_str, lang):
             dt = dt.replace(tzinfo=pytz.UTC)
         now = datetime.datetime.now(pytz.UTC)
         diff = now - dt
-        
         seconds = diff.total_seconds()
-        if seconds < 60:
-            return "現在" if lang == "中文" else "Just now"
+        if seconds < 60: return "現在" if lang == "中文" else "Just now"
         elif seconds < 3600:
             mins = int(seconds // 60)
             return f"{mins} 分鐘前" if lang == "中文" else f"{mins}m ago"
@@ -51,13 +45,12 @@ def fetch_og_image(url):
     if not url or url == "#" or "google.com" in url:
         return None
     try:
-        headers = {'User-Agent': ua.random if ua else 'Mozilla/5.0'}
+        headers = {'User-Agent': ua.random}
         res = requests.get(url, timeout=5, headers=headers)
         if res.status_code == 200:
             soup = BeautifulSoup(res.content, 'lxml')
             og_img = soup.find("meta", property="og:image")
-            if og_img and og_img.get("content"):
-                return og_img["content"]
+            if og_img: return og_img.get("content")
     except:
         pass
     return None
@@ -71,75 +64,63 @@ country_options = {"Global / 全球": "", "Hong Kong / 香港": "hk", "Taiwan / 
 selected_country = st.selectbox("選擇地區 / Region", list(country_options.keys()), index=1)
 country_code = country_options[selected_country]
 
-texts = {
-    "title": "全球即時新聞搜尋" if interface_lang == "中文" else "Global News Search",
-    "btn": "開始搜尋" if interface_lang == "中文" else "Search",
-    "loading": "正在抓取最新資訊..." if interface_lang == "中文" else "Fetching latest info...",
-    "tip": "提示：NewsData 提供 12 小時前新聞，Google 提供即時新聞。" if interface_lang == "中文" else "Tip: Mixed real-time and delayed news."
-}
-
-st.title(texts["title"])
-st.caption(texts["tip"])
+title_text = "全球即時新聞搜尋" if interface_lang == "中文" else "Global News Search"
+st.title(title_text)
 
 # ===== 搜尋區塊 =====
-query = st.text_input("Keyword", placeholder="例如：伊朗、李家超", label_visibility="collapsed")
+query = st.text_input("搜尋關鍵字", placeholder="例如：伊朗、李家超", label_visibility="collapsed")
 
 if 'search_results' not in st.session_state:
     st.session_state.search_results = None
 
-if st.button(texts["btn"]):
+if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
     if not query:
         st.error("請輸入關鍵字")
     else:
-        with st.spinner(texts["loading"]):
+        with st.spinner("正在搜尋新聞..."):
             results = []
-            # 1. NewsData.io (嘗試抓取 12 小時前新聞)
+            headers = {'User-Agent': ua.random}
+
+            # 1. NewsData.io (12小時延遲版本)
             try:
                 api_key = st.secrets["NEWS_API_KEY"].strip().replace('"', '')
                 nd_url = "https://newsdata.io"
-                nd_params = {
-                    "apikey": api_key,
-                    "q": query,
-                    "language": "zh,en",
-                    "size": 5
-                }
-                if country_code:
-                    nd_params["country"] = country_code
+                nd_params = {"apikey": api_key, "q": query, "language": "zh,en", "size": 5}
+                if country_code: nd_params["country"] = country_code
                 
-                res_nd = requests.get(nd_url, params=nd_params, timeout=10)
+                res_nd = requests.get(nd_url, params=nd_params, timeout=10, headers=headers)
                 if res_nd.status_code == 200:
-                    data = res_nd.json()
-                    for item in data.get("results", []):
-                        link = item.get("link", "#")
+                    for item in res_nd.json().get("results", []):
                         results.append({
                             "title": item.get("title", ""),
-                            "source": item.get("source_id", "NewsData (12h Delay)"),
+                            "source": item.get("source_id", "NewsData"),
                             "date": item.get("pubDate"),
-                            "link": link,
-                            "img": item.get("image_url") or fetch_og_image(link)
+                            "link": item.get("link", "#"),
+                            "img": item.get("image_url")
                         })
             except:
-                pass # NewsData 報錯時靜默跳過，不影響使用者
+                pass
 
-            # 2. Google News RSS (100% 穩定備援)
+            # 2. Google News RSS (強化版)
             try:
-                g_url = f"https://google.com{quote(query)}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
-                res_g = requests.get(g_url, timeout=12)
+                encoded_q = quote(query)
+                g_url = f"https://google.com{encoded_q}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
+                res_g = requests.get(g_url, timeout=12, headers=headers)
                 if res_g.status_code == 200:
                     root = ET.fromstring(res_g.content)
-                    for item in root.findall(".//item")[:12]:
+                    for item in root.findall(".//item")[:15]:
                         link = item.find("link").text
                         title_raw = item.find("title").text or ""
                         source_match = re.search(r' - (.+)$', title_raw)
                         source = source_match.group(1) if source_match else "Google News"
                         title = re.sub(r' - .+$', '', title_raw)
                         results.append({
-                            "title": title, "source": f"{source} (Real-time)",
+                            "title": title, "source": source,
                             "date": item.find("pubDate").text, "link": link,
-                            "img": fetch_og_image(link)
+                            "img": None # 稍後異步加載或點擊顯示
                         })
-            except:
-                pass
+            except Exception as e:
+                st.sidebar.error(f"Google 暫時無法連線: {e}")
 
             # 去重與排序
             if results:
@@ -154,12 +135,13 @@ if st.button(texts["btn"]):
 # ===== 顯示結果 =====
 if st.session_state.search_results is not None:
     if not st.session_state.search_results:
-        st.info("找不到新聞，請試試其他關鍵字。")
+        st.warning("找不到新聞，請嘗試換個關鍵字。")
     else:
         for art in st.session_state.search_results:
             c1, c2 = st.columns([1, 3])
             with c1:
-                if art['img']:
+                # 為了搜尋速度，如果原本沒圖就顯示預設圖，不現場抓取
+                if art.get('img'):
                     st.image(art['img'], use_column_width=True)
                 else:
                     st.image("https://placeholder.com", use_column_width=True)
