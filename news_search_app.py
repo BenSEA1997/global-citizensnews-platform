@@ -3,7 +3,7 @@ import requests
 import re
 import datetime
 from xml.etree import ElementTree as ET
-from urllib.parse import quote  # 加入這一行，解決 quote not defined 錯誤
+from urllib.parse import quote
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
@@ -17,6 +17,17 @@ with col2:
         label_visibility="collapsed",
         key="lang_switch"
     )
+
+# ===== 地區選擇（加回來） =====
+country_options = {
+    "Global / 全球": "",
+    "Hong Kong / 香港": "hk",
+    "Taiwan / 台灣": "tw",
+    "China / 大陸": "cn"
+}
+country_label = "Select Region / 選擇地區" if interface_lang == "English" else "選擇地區 / Select Region"
+selected_country = st.selectbox(country_label, list(country_options.keys()), index=1)  # 預設香港
+country_code = country_options[selected_country]
 
 # ===== 語言文字設定 =====
 if interface_lang == "English":
@@ -67,14 +78,14 @@ if st.button(search_button):
             if re.search(r'[\u4e00-\u9fff]', query):
                 precise_query = f'"{query}"'
             
-            # NewsData.io 搜尋（主流媒體 + 中英文 + 10 條）
-            url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&size=10"
+            # NewsData.io 搜尋（加地區選擇）
+            url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&country={country_code}&size=10"
             response = requests.get(url_nd, timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 results.extend(data.get("results", []))
 
-            # Google News RSS 補充（即時性高 + 香港本地新聞多）
+            # Google News RSS 補充
             google_query = quote(query)
             url_google = f"https://news.google.com/rss/search?q={google_query}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
             response = requests.get(url_google, timeout=15)
@@ -84,13 +95,13 @@ if st.button(search_button):
                     title = item.find("title").text
                     link = item.find("link").text
                     pub = item.find("pubDate").text
-                    # 解析真實媒體名稱（title 通常是 "標題 - 媒體"）
-                    match = re.match(r'(.*) - (.*)', title)
+                    # 加強解析媒體名稱（只取 - 後面的部分）
+                    match = re.search(r' - (.+?)(?=\s*\(|$)', title)
                     if match:
-                        title = match.group(1)
-                        source = match.group(2)
+                        source = match.group(1).strip()
                     else:
-                        source = "Google News"
+                        source = "Google News"  # 最後防線
+                    title = re.sub(r' - .+$', '', title).strip()
                     results.append({"title": title, "description": "From Google News", "source_id": source, "pubDate": pub, "link": link})
 
             # 去重 + 按時間排序（從新到舊）
@@ -121,7 +132,8 @@ if st.session_state.search_results is not None:
             with col2:
                 st.markdown(f"**{title}**")
                 st.write(desc)
-                st.caption(f"{source} | {pub}")
+                st.caption(f"{source}")
+                st.caption(pub)
                 st.markdown(f"[閱讀全文 / Read full article]({link})")
             st.divider()
 
