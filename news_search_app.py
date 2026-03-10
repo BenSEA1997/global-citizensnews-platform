@@ -4,7 +4,8 @@ import re
 import datetime
 from xml.etree import ElementTree as ET
 from urllib.parse import quote
-from dateutil import parser  # 用來正確解析各種日期格式
+from dateutil import parser
+from bs4 import BeautifulSoup  # 新增：用來清理 Google RSS 的 HTML description
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
@@ -77,7 +78,7 @@ if st.button(search_button):
             if re.search(r'[\u4e00-\u9fff]', query):
                 precise_query = f'"{query}"'
 
-            # NewsData.io 搜尋
+            # NewsData.io 搜尋（description 通常乾淨）
             url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10"
             response_nd = requests.get(url_nd, timeout=15)
             if response_nd.status_code == 200:
@@ -87,16 +88,17 @@ if st.button(search_button):
                     if img_url and img_url.strip() == "":
                         img_url = None
 
+                    desc = item.get("description", item.get("content", "")[:300])
                     results.append({
                         "title": item.get("title", ""),
-                        "description": item.get("description", item.get("content", "")[:300]),
+                        "description": desc,
                         "source_id": item.get("source_id", "NewsData"),
                         "pubDate": item.get("pubDate"),
                         "link": item.get("link", "#"),
                         "image_url": img_url
                     })
 
-            # Google News RSS 補充
+            # Google News RSS 補充（重點清理 description）
             google_query = quote(query)
             url_google = f"https://news.google.com/rss/search?q={google_query}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
             response_google = requests.get(url_google, timeout=15)
@@ -106,7 +108,15 @@ if st.button(search_button):
                     title_raw = item.find("title").text or ""
                     link = item.find("link").text or "#"
                     pub = item.find("pubDate").text or ""
-                    desc = item.find("description").text or ""
+
+                    # 清理 description：移除 HTML，只取文字，並移除最後的 "See more..." 連結
+                    desc_raw = item.find("description").text or ""
+                    soup = BeautifulSoup(desc_raw, 'html.parser')
+                    # 移除最後一個 <a>（通常是 Google 的連結）
+                    if soup.find_all('a'):
+                        soup.find_all('a')[-1].decompose()
+                    # 取出純文字，並移除多餘空白
+                    clean_desc = soup.get_text(separator=' ', strip=True)[:300]
 
                     match = re.search(r' - (.+?)(?=\s*\(|$)', title_raw)
                     source = match.group(1).strip() if match else "Google News"
@@ -114,14 +124,14 @@ if st.button(search_button):
 
                     results.append({
                         "title": title,
-                        "description": desc[:300],
+                        "description": clean_desc,
                         "source_id": source,
                         "pubDate": pub,
                         "link": link,
                         "image_url": None
                     })
 
-            # 去重 + 按時間排序（最新 → 最舊）
+            # 去重 + 排序
             unique_results = {r['link']: r for r in results if r.get('link') and r['link'] != "#"}.values()
 
             def parse_date(date_str):
