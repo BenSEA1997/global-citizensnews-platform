@@ -65,20 +65,21 @@ if st.button(search_button):
             if re.search(r'[\u4e00-\u9fff]', query):
                 precise_query = f'"{query}"'
             
-            # 放寬條件：size=10（免費版上限）
-            url_precise = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&prioritydomain=top,primary&size=10"
-            response = requests.get(url_precise, timeout=15)
+            # 過去 3 天日期
+            since_date = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
             
+            # 放寬條件：移除 prioritydomain，保留地區 + 語言 + size=10
+            url_precise = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&country=hk,tw,cn&since={since_date}&size=10"
+            response = requests.get(url_precise, timeout=15)
             if response.status_code == 200:
                 data = response.json()
                 results = data.get("results", [])
             else:
                 st.error(f"API 錯誤：{response.status_code} - {response.text}")
-                results = []
             
             # 如果結果少於 5 條，自動切模糊搜尋
             if len(results) < 5:
-                url_fuzzy = f"https://newsdata.io/api/1/news?apikey={api_key}&q={query}&language=zh,en&prioritydomain=top,primary&size=10"
+                url_fuzzy = f"https://newsdata.io/api/1/news?apikey={api_key}&q={query}&language=zh,en&country=hk,tw,cn&since={since_date}&size=10"
                 response = requests.get(url_fuzzy, timeout=15)
                 if response.status_code == 200:
                     data = response.json()
