@@ -78,7 +78,7 @@ if st.button(search_button):
             if re.search(r'[\u4e00-\u9fff]', query):
                 precise_query = f'"{query}"'
             
-            # NewsData.io 搜尋
+            # NewsData.io 搜尋（加地區選擇）
             url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&country={country_code}&size=10"
             response = requests.get(url_nd, timeout=15)
             if response.status_code == 200:
@@ -95,9 +95,9 @@ if st.button(search_button):
                     title = item.find("title").text
                     link = item.find("link").text
                     pub = item.find("pubDate").text
-                    # 加強解析媒體名稱（只取 - 後面的部分）
+                    # 解析真實媒體名稱
                     match = re.search(r' - (.+?)(?=\s*\(|$)', title)
-                    source = match.group(1).strip() if match else "Google News"
+                    source = match.group(1).strip() if match else "新聞來源"
                     title = re.sub(r' - .+$', '', title).strip()
                     results.append({"title": title, "description": " ", "source_id": source, "pubDate": pub, "link": link})
 
@@ -110,7 +110,7 @@ if st.button(search_button):
             st.error(f"{error_generic}: {str(e)}")
             st.session_state.search_results = None
 
-# 顯示搜尋結果
+# 顯示搜尋結果（含真實圖片）
 if st.session_state.search_results is not None:
     articles = st.session_state.search_results
     st.subheader("搜尋結果" if interface_lang == "中文" else "Search Results")
@@ -123,15 +123,25 @@ if st.session_state.search_results is not None:
             source = article.get('source_id', '未知' if interface_lang == "中文" else 'Unknown')
             pub = article.get('pubDate', '未知' if interface_lang == "中文" else 'Unknown')
             link = article.get('link', '#')
+            
             col1, col2 = st.columns([1, 5])
             with col1:
-                # 圖片 placeholder（未來可換真圖片）
-                st.image("https://via.placeholder.com/100x100?text=News", width=100)
+                # 用新聞標題搜尋真實圖片
+                try:
+                    image_results = search_images(title, number_of_images=1)
+                    if image_results and len(image_results) > 0:
+                        image_url = image_results[0]['image_url']
+                        st.image(image_url, width=100)
+                    else:
+                        st.image("https://via.placeholder.com/100x100?text=News", width=100)
+                except Exception as e:
+                    st.image("https://via.placeholder.com/100x100?text=News", width=100)
+                    st.caption(f"圖片載入失敗: {str(e)}")
+            
             with col2:
                 st.markdown(f"**{title}**")
                 st.write(desc)
-                st.caption(f"{source}")
-                st.caption(pub)
+                st.caption(f"{source} | {pub}")
                 st.markdown(f"[閱讀全文 / Read full article]({link})")
             st.divider()
 
