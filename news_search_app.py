@@ -3,6 +3,7 @@ import requests
 import re
 import datetime
 from xml.etree import ElementTree as ET
+from urllib.parse import quote  # 加入這一行，解決 quote not defined 錯誤
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
@@ -116,7 +117,6 @@ if st.session_state.search_results is not None:
             link = article.get('link', '#')
             col1, col2 = st.columns([1, 5])
             with col1:
-                # 圖片 placeholder（未來可換成真圖片搜尋）
                 st.image("https://via.placeholder.com/100x100?text=News", width=100)
             with col2:
                 st.markdown(f"**{title}**")
