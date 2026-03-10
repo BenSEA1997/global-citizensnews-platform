@@ -89,12 +89,22 @@ if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
             except:
                 pass
 
-            # 2. Google News RSS (完整網址修正)
+                       # 2. Google News RSS (拆分拼接，防止路徑丟失)
             try:
+                base_g_url = "https://google.com"
                 encoded_q = quote(query)
-                g_url = f"https://google.com{encoded_q}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
-                res_g = requests.get(g_url, timeout=12, headers=headers)
+                # 使用 params 方式讓 requests 自動處理拼接，不要用 f-string
+                g_params = {
+                    "q": query,
+                    "hl": "zh-TW",
+                    "gl": "HK",
+                    "ceid": "HK:zh-Hant"
+                }
+                res_g = requests.get(base_g_url, params=g_params, timeout=12, headers=headers)
+                
                 if res_g.status_code == 200:
+                    # 偵錯用：如果在側邊欄看到這個，代表連線成功
+                    # st.sidebar.success("Google 連線成功")
                     root = ET.fromstring(res_g.content)
                     for item in root.findall(".//item")[:15]:
                         link = item.find("link").text
@@ -107,8 +117,11 @@ if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
                             "date": item.find("pubDate").text, "link": link,
                             "img": None
                         })
+                else:
+                    st.sidebar.error(f"Google 狀態碼: {res_g.status_code}")
             except Exception as e:
-                st.sidebar.error(f"連線狀態: {e}")
+                st.sidebar.error(f"Google 連線偵錯: {e}")
+
 
             # 去重與排序
             if results:
