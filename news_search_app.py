@@ -18,7 +18,7 @@ with col2:
         key="lang_switch"
     )
 
-# ===== 地區選擇（加回來） =====
+# ===== 地區選擇 =====
 country_options = {
     "Global / 全球": "",
     "Hong Kong / 香港": "hk",
@@ -78,7 +78,7 @@ if st.button(search_button):
             if re.search(r'[\u4e00-\u9fff]', query):
                 precise_query = f'"{query}"'
             
-            # NewsData.io 搜尋（加地區選擇）
+            # NewsData.io 搜尋
             url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&country={country_code}&size=10"
             response = requests.get(url_nd, timeout=15)
             if response.status_code == 200:
@@ -97,12 +97,9 @@ if st.button(search_button):
                     pub = item.find("pubDate").text
                     # 加強解析媒體名稱（只取 - 後面的部分）
                     match = re.search(r' - (.+?)(?=\s*\(|$)', title)
-                    if match:
-                        source = match.group(1).strip()
-                    else:
-                        source = "Google News"  # 最後防線
+                    source = match.group(1).strip() if match else "Google News"
                     title = re.sub(r' - .+$', '', title).strip()
-                    results.append({"title": title, "description": "From Google News", "source_id": source, "pubDate": pub, "link": link})
+                    results.append({"title": title, "description": " ", "source_id": source, "pubDate": pub, "link": link})
 
             # 去重 + 按時間排序（從新到舊）
             unique_results = {r['link']: r for r in results if r['link']}.values()
@@ -128,6 +125,7 @@ if st.session_state.search_results is not None:
             link = article.get('link', '#')
             col1, col2 = st.columns([1, 5])
             with col1:
+                # 圖片 placeholder（未來可換真圖片）
                 st.image("https://via.placeholder.com/100x100?text=News", width=100)
             with col2:
                 st.markdown(f"**{title}**")
