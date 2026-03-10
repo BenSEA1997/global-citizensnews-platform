@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 import pytz
 from fake_useragent import UserAgent
 
+# 頁面配置
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
 # 初始化工具
@@ -43,159 +44,111 @@ def get_relative_time(date_str, lang):
 
 # ===== 輔助函數：抓取網頁 OG Image =====
 def fetch_og_image(url):
+    if not url or url == "#":
+        return None
     try:
         headers = {'User-Agent': ua.random}
         res = requests.get(url, timeout=5, headers=headers)
         if res.status_code == 200:
             soup = BeautifulSoup(res.content, 'lxml')
             og_img = soup.find("meta", property="og:image")
-            if og_img:
+            if og_img and og_img.get("content"):
                 return og_img["content"]
     except:
         pass
     return None
 
-# ===== 右上角語言切換 =====
-col1, col2 = st.columns([8, 1])
+# ===== 介面語言與地區設定 =====
+col1, col2 = st.columns([8, 2])
 with col2:
-    interface_lang = st.selectbox(
-        "Language / 語言",
-        ["English", "中文"],
-        index=0,
-        label_visibility="collapsed",
-        key="lang_switch"
-    )
+    interface_lang = st.selectbox("Language", ["English", "中文"], index=1, label_visibility="collapsed")
 
-# ===== 地區選擇 =====
-country_options = {
-    "Global / 全球": "",
-    "Hong Kong / 香港": "hk",
-    "Taiwan / 台灣": "tw",
-    "China / 大陸": "cn"
-}
-country_label = "Select Region / 選擇地區" if interface_lang == "English" else "選擇地區 / Select Region"
-selected_country = st.selectbox(country_label, list(country_options.keys()), index=1)
+country_options = {"Global / 全球": "", "Hong Kong / 香港": "hk", "Taiwan / 台灣": "tw", "China / 大陸": "cn"}
+selected_country = st.selectbox("選擇地區 / Region", list(country_options.keys()), index=1)
 country_code = country_options[selected_country]
 
-# ===== 語言文字設定 =====
+# 文字設定
 if interface_lang == "English":
-    page_title = "Global Real-time News Search"
-    search_label = "Search location or event"
-    search_placeholder = "e.g. Tehran Iran, Li Ka-shing"
-    search_button = "Search"
-    loading_text = "Fetching news & images..."
-    no_results = "No news found. Try other keywords."
-    error_timeout = "Connection timed out."
-    error_generic = "An error occurred"
-    success_text = "Search completed!"
-    search_tip = "Tip: Use quotes for exact names."
+    texts = {"title": "Global News Search", "btn": "Search", "loading": "Fetching...", "tip": "Tip: Use quotes for exact names."}
 else:
-    page_title = "全球即時新聞搜尋"
-    search_label = "搜尋地點或事件"
-    search_placeholder = "例如：伊朗德黑蘭、李家超"
-    search_button = "開始搜尋"
-    loading_text = "正在抓取新聞與圖片..."
-    no_results = "沒有找到新聞，請試其他關鍵字"
-    error_timeout = "連接超時，請檢查網路"
-    error_generic = "發生錯誤"
-    success_text = "✅ 搜尋完成！"
-    search_tip = "提示：人名或專有名詞建議用引號包住。"
+    texts = {"title": "全球即時新聞搜尋", "btn": "開始搜尋", "loading": "正在抓取新聞與圖片...", "tip": "提示：人名或專有名詞建議用引號包住。"}
 
-st.title(page_title)
-st.caption(search_tip)
+st.title(texts["title"])
+st.caption(texts["tip"])
 
-query = st.text_input(search_label, placeholder=search_placeholder)
+# ===== 搜尋邏輯 =====
+query = st.text_input("Keyword", placeholder="e.g. Tehran, 李家超", label_visibility="collapsed")
 
 if 'search_results' not in st.session_state:
     st.session_state.search_results = None
 
-if st.button(search_button):
+if st.button(texts["btn"]):
     if not query:
-        st.error("請輸入關鍵字" if interface_lang == "中文" else "Please enter keywords")
+        st.error("請輸入關鍵字")
     else:
-        st.info(loading_text)
+        st.info(texts["loading"])
+        results = []
         try:
-            api_key = st.secrets["NEWS_API_KEY"]
-            results = []
+            api_key = st.secrets["NEWS_API_KEY"].strip() # 確保無空格
             precise_query = f'"{query}"' if re.search(r'[\u4e00-\u9fff]', query) else query
+            encoded_query = quote(precise_query)
 
-            # 1. NewsData.io
-            url_nd = f"https://newsdata.io{api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10"
+            # 1. NewsData.io (修正拼接格式)
+            url_nd = f"https://newsdata.io{api_key}&q={encoded_query}&language=zh,en&country={country_code}&size=10"
             res_nd = requests.get(url_nd, timeout=10)
             if res_nd.status_code == 200:
                 for item in res_nd.json().get("results", []):
-                    img = item.get("image_url")
-                    # 如果 API 沒給圖，現場抓取
-                    if not img:
-                        img = fetch_og_image(item.get("link"))
-                    
+                    img = item.get("image_url") or fetch_og_image(item.get("link"))
                     results.append({
                         "title": item.get("title", ""),
                         "description": item.get("description") or "",
-                        "source_id": item.get("source_id", "NewsData"),
-                        "pubDate": item.get("pubDate"),
+                        "source": item.get("source_id", "NewsData"),
+                        "date": item.get("pubDate"),
                         "link": item.get("link", "#"),
-                        "image_url": img
+                        "img": img
                     })
 
             # 2. Google News RSS
-            google_query = quote(query)
-            url_google = f"https://google.com{google_query}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
-            res_g = requests.get(url_google, timeout=10)
+            url_g = f"https://google.com{encoded_query}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
+            res_g = requests.get(url_g, timeout=10)
             if res_g.status_code == 200:
                 root = ET.fromstring(res_g.content)
-                for item in root.findall(".//item")[:10]:
+                for item in root.findall(".//item")[:8]:
                     link = item.find("link").text
-                    # Google News RSS 必定無圖，啟動現場抓取
                     img = fetch_og_image(link)
-                    
                     title_raw = item.find("title").text or ""
-                    match = re.search(r' - (.+?)(?=\s*\(|$)', title_raw)
-                    source = match.group(1).strip() if match else "Google News"
-                    title = re.sub(r' - .+$', '', title_raw).strip()
-
+                    source = re.search(r' - (.+)$', title_raw)
+                    source = source.group(1) if source else "Google News"
+                    title = re.sub(r' - .+$', '', title_raw)
                     results.append({
-                        "title": title,
-                        "description": "", 
-                        "source_id": source,
-                        "pubDate": item.find("pubDate").text,
-                        "link": link,
-                        "image_url": img
+                        "title": title, "description": "", "source": source,
+                        "date": item.find("pubDate").text, "link": link, "img": img
                     })
 
-            # 去重
-            unique_results = {r['link']: r for r in results if r['link'] != "#"}.values()
+            # 去重與排序
+            unique = {r['link']: r for r in results if r['link'] != "#"}.values()
+            sorted_res = sorted(unique, key=lambda x: parser.parse(x['date']) if x['date'] else datetime.datetime.min, reverse=True)
             
-            # 排序
-            sorted_results = sorted(
-                unique_results,
-                key=lambda x: parser.parse(x['pubDate']) if x['pubDate'] else datetime.datetime.min,
-                reverse=True
-            )
-
-            # 處理顯示時間
-            for r in sorted_results:
-                r['relative_time'] = get_relative_time(r['pubDate'], interface_lang)
-
-            st.session_state.search_results = sorted_results
-
+            for r in sorted_res:
+                r['time_display'] = get_relative_time(r['date'], interface_lang)
+            
+            st.session_state.search_results = sorted_res
+            st.success("完成！")
         except Exception as e:
-            st.error(f"{error_generic}: {str(e)}")
-        else:
-            st.success(success_text)
+            st.error(f"發生錯誤: {e}")
 
-# ===== 顯示搜尋結果 =====
-if st.session_state.search_results is not None:
-    for article in st.session_state.search_results:
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            if article['image_url']:
-                st.image(article['image_url'], use_column_width=True)
+# ===== 顯示結果 =====
+if st.session_state.search_results:
+    for art in st.session_state.search_results:
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            if art['img']:
+                st.image(art['img'], use_column_width=True)
             else:
                 st.image("https://placeholder.com", width=150)
-        with col2:
-            st.markdown(f"### [{article['title']}]({article['link']})")
-            st.caption(f"📍 {article['source_id']} • 🕒 {article['relative_time']}")
-            if article['description']:
-                st.write(article['description'][:150] + "...")
+        with c2:
+            st.markdown(f"### [{art['title']}]({art['link']})")
+            st.caption(f"📍 {art['source']} • 🕒 {art['time_display']}")
+            if art['description']:
+                st.write(art['description'][:120] + "...")
         st.divider()
