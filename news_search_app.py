@@ -63,25 +63,26 @@ def fetch_og_image(url):
     return None
 
 # ===== 介面語言與地區設定 =====
-col1, col2 = st.columns([8, 2])
+col1, col2 = st.columns([8, 1])
 with col2:
-    interface_lang = st.selectbox("Language", ["English", "中文"], index=1, label_visibility="collapsed")
+    interface_lang = st.selectbox("Lang", ["English", "中文"], index=1, label_visibility="collapsed")
 
 country_options = {"Global / 全球": "", "Hong Kong / 香港": "hk", "Taiwan / 台灣": "tw", "China / 大陸": "cn"}
 selected_country = st.selectbox("選擇地區 / Region", list(country_options.keys()), index=1)
 country_code = country_options[selected_country]
 
-# 文字設定
-if interface_lang == "English":
-    texts = {"title": "Global News Search", "btn": "Search", "loading": "Fetching News & Images...", "tip": "Tip: Use quotes for exact names."}
-else:
-    texts = {"title": "全球即時新聞搜尋", "btn": "開始搜尋", "loading": "正在抓取新聞與圖片...", "tip": "提示：人名或專有名詞建議用引號包住。"}
+texts = {
+    "title": "全球即時新聞搜尋" if interface_lang == "中文" else "Global News Search",
+    "btn": "開始搜尋" if interface_lang == "中文" else "Search",
+    "loading": "正在抓取最新資訊..." if interface_lang == "中文" else "Fetching latest info...",
+    "tip": "提示：NewsData 提供 12 小時前新聞，Google 提供即時新聞。" if interface_lang == "中文" else "Tip: Mixed real-time and delayed news."
+}
 
 st.title(texts["title"])
 st.caption(texts["tip"])
 
 # ===== 搜尋區塊 =====
-query = st.text_input("Keyword", placeholder="e.g. Tehran, 李家超", label_visibility="collapsed")
+query = st.text_input("Keyword", placeholder="例如：伊朗、李家超", label_visibility="collapsed")
 
 if 'search_results' not in st.session_state:
     st.session_state.search_results = None
@@ -92,83 +93,77 @@ if st.button(texts["btn"]):
     else:
         with st.spinner(texts["loading"]):
             results = []
+            # 1. NewsData.io (嘗試抓取 12 小時前新聞)
             try:
-                # 取得 API Key 並清理
-                api_key = st.secrets["NEWS_API_KEY"].strip().replace('"', '').replace("'", "")
-                precise_query = f'"{query}"' if re.search(r'[\u4e00-\u9fff]', query) else query
-
-                # 1. NewsData.io (使用 params 傳參，最安全)
+                api_key = st.secrets["NEWS_API_KEY"].strip().replace('"', '')
                 nd_url = "https://newsdata.io"
                 nd_params = {
                     "apikey": api_key,
-                    "q": precise_query,
+                    "q": query,
                     "language": "zh,en",
-                    "size": 10
+                    "size": 5
                 }
                 if country_code:
                     nd_params["country"] = country_code
-
-                res_nd = requests.get(nd_url, params=nd_params, timeout=12)
+                
+                res_nd = requests.get(nd_url, params=nd_params, timeout=10)
                 if res_nd.status_code == 200:
                     data = res_nd.json()
                     for item in data.get("results", []):
                         link = item.get("link", "#")
-                        img = item.get("image_url")
-                        if not img:
-                            img = fetch_og_image(link)
-                        
                         results.append({
                             "title": item.get("title", ""),
-                            "description": item.get("description") or "",
-                            "source": item.get("source_id", "NewsData"),
+                            "source": item.get("source_id", "NewsData (12h Delay)"),
                             "date": item.get("pubDate"),
                             "link": link,
-                            "img": img
+                            "img": item.get("image_url") or fetch_og_image(link)
                         })
+            except:
+                pass # NewsData 報錯時靜默跳過，不影響使用者
 
-                # 2. Google News RSS
+            # 2. Google News RSS (100% 穩定備援)
+            try:
                 g_url = f"https://google.com{quote(query)}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
                 res_g = requests.get(g_url, timeout=12)
                 if res_g.status_code == 200:
                     root = ET.fromstring(res_g.content)
-                    for item in root.findall(".//item")[:8]:
+                    for item in root.findall(".//item")[:12]:
                         link = item.find("link").text
-                        img = fetch_og_image(link)
                         title_raw = item.find("title").text or ""
                         source_match = re.search(r' - (.+)$', title_raw)
                         source = source_match.group(1) if source_match else "Google News"
                         title = re.sub(r' - .+$', '', title_raw)
                         results.append({
-                            "title": title, "description": "", "source": source,
-                            "date": item.find("pubDate").text, "link": link, "img": img
+                            "title": title, "source": f"{source} (Real-time)",
+                            "date": item.find("pubDate").text, "link": link,
+                            "img": fetch_og_image(link)
                         })
+            except:
+                pass
 
-                # 去重與排序
+            # 去重與排序
+            if results:
                 unique = {r['link']: r for r in results if r['link'] != "#"}.values()
                 sorted_res = sorted(unique, key=lambda x: parser.parse(x['date']) if x['date'] else datetime.datetime.min, reverse=True)
-                
                 for r in sorted_res:
                     r['time_display'] = get_relative_time(r['date'], interface_lang)
-                
                 st.session_state.search_results = sorted_res
-
-            except Exception as e:
-                st.error(f"發生錯誤: {e}")
+            else:
+                st.session_state.search_results = []
 
 # ===== 顯示結果 =====
-if st.session_state.search_results:
-    st.write(f"找到 {len(st.session_state.search_results)} 條結果")
-    for art in st.session_state.search_results:
-        col_img, col_txt = st.columns([1, 3])
-        with col_img:
-            if art['img']:
-                st.image(art['img'], use_column_width=True)
-            else:
-                st.image("https://placeholder.com", use_column_width=True)
-        with col_txt:
-            st.markdown(f"#### [{art['title']}]({art['link']})")
-            st.caption(f"📍 {art['source']} • 🕒 {art['time_display']}")
-            if art['description']:
-                clean_desc = re.sub('<[^<]+?>', '', art['description']) # 去除 HTML
-                st.write(clean_desc[:120] + "...")
-        st.divider()
+if st.session_state.search_results is not None:
+    if not st.session_state.search_results:
+        st.info("找不到新聞，請試試其他關鍵字。")
+    else:
+        for art in st.session_state.search_results:
+            c1, c2 = st.columns([1, 3])
+            with c1:
+                if art['img']:
+                    st.image(art['img'], use_column_width=True)
+                else:
+                    st.image("https://placeholder.com", use_column_width=True)
+            with c2:
+                st.markdown(f"#### [{art['title']}]({art['link']})")
+                st.caption(f"📍 {art['source']} • 🕒 {art['time_display']}")
+            st.divider()
