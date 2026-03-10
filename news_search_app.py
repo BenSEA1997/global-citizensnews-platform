@@ -1,6 +1,8 @@
 import streamlit as st
 import requests
 import re
+import datetime
+from operator import itemgetter
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
@@ -64,27 +66,25 @@ if st.button(search_button):
             if re.search(r'[\u4e00-\u9fff]', query):
                 precise_query = f'"{query}"'
             
-            # 移除 since，改用 sort_by=published（按時間排序）
-            url_precise = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&country=hk,tw,cn&sort_by=published&size=10"
-            st.caption(f"Debug: Calling API with URL: {url_precise}")
-            
+            # 最簡單條件：只保留語言 + 地區 + size=10（避免 422）
+            url_precise = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&country=hk,tw,cn&size=10"
             response = requests.get(url_precise, timeout=15)
-            st.caption(f"Debug: Response status: {response.status_code}")
-            
             if response.status_code == 200:
                 data = response.json()
                 results = data.get("results", [])
-                st.caption(f"Debug: Found {len(results)} news items")
             else:
                 st.error(f"API 錯誤：{response.status_code} - {response.text}")
             
             # 如果結果少於 5 條，自動切模糊搜尋
             if len(results) < 5:
-                url_fuzzy = f"https://newsdata.io/api/1/news?apikey={api_key}&q={query}&language=zh,en&country=hk,tw,cn&sort_by=published&size=10"
+                url_fuzzy = f"https://newsdata.io/api/1/news?apikey={api_key}&q={query}&language=zh,en&country=hk,tw,cn&size=10"
                 response = requests.get(url_fuzzy, timeout=15)
                 if response.status_code == 200:
                     data = response.json()
                     results.extend(data.get("results", []))
+
+            # 程式端排序（從新到舊）
+            results = sorted(results, key=lambda x: x.get('pubDate', ''), reverse=True) if results else []
 
             st.session_state.search_results = results
         except Exception as e:
