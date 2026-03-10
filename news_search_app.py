@@ -9,16 +9,30 @@ from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
-# ===== 抓取新聞頁面 OpenGraph 圖片 =====
+# ===== 抓取新聞頁面圖片 =====
 def extract_image_from_article(url):
+
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
+
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+
         r = requests.get(url, headers=headers, timeout=8)
+
         soup = BeautifulSoup(r.text, "html.parser")
 
         og = soup.find("meta", property="og:image")
+
         if og and og.get("content"):
             return og["content"]
+
+        # 如果沒有 og:image，再找文章第一張圖片
+        img = soup.find("img")
+
+        if img and img.get("src"):
+            return img["src"]
 
     except:
         return None
@@ -26,58 +40,71 @@ def extract_image_from_article(url):
     return None
 
 
+# ===== 取得 Google News 真實新聞網址 =====
+def get_real_news_url(google_link):
+
+    try:
+
+        headers = {"User-Agent": "Mozilla/5.0"}
+
+        r = requests.get(google_link, headers=headers, timeout=5, allow_redirects=True)
+
+        return r.url
+
+    except:
+
+        return google_link
+
+
 # ===== 右上角語言切換 =====
-col1, col2 = st.columns([8, 1])
+col1, col2 = st.columns([8,1])
+
 with col2:
+
     interface_lang = st.selectbox(
-        "Language / 語言",
-        ["English", "中文"],
-        index=0,
-        label_visibility="collapsed",
-        key="lang_switch"
+        "Language",
+        ["English","中文"],
+        label_visibility="collapsed"
     )
+
 
 # ===== 地區選擇 =====
 country_options = {
-    "Global / 全球": "",
-    "Hong Kong / 香港": "hk",
-    "Taiwan / 台灣": "tw",
-    "China / 大陸": "cn"
+
+    "Global / 全球":"",
+    "Hong Kong / 香港":"hk",
+    "Taiwan / 台灣":"tw",
+    "China / 大陸":"cn"
+
 }
 
-country_label = "Select Region / 選擇地區" if interface_lang == "English" else "選擇地區 / Select Region"
-
-selected_country = st.selectbox(country_label, list(country_options.keys()), index=1)
+selected_country = st.selectbox(
+    "Select Region / 選擇地區",
+    list(country_options.keys()),
+    index=1
+)
 
 country_code = country_options[selected_country]
 
 
-# ===== 語言文字設定 =====
+# ===== 文字 =====
 if interface_lang == "English":
 
-    page_title = "Global Real-time News Search"
-    search_label = "Search location or event"
-    search_placeholder = "e.g. Tehran Iran, Li Ka-shing"
+    title = "Global Real-time News Search"
     search_button = "Search"
-    loading_text = "Fetching news..."
-    no_results = "No news found. Try other keywords."
-    success_text = "Search completed!"
 
 else:
 
-    page_title = "全球即時新聞搜尋"
-    search_label = "搜尋地點或事件"
-    search_placeholder = "例如：伊朗德黑蘭、李家超"
+    title = "全球即時新聞搜尋"
     search_button = "開始搜尋"
-    loading_text = "正在抓取新聞..."
-    no_results = "沒有找到新聞"
-    success_text = "搜尋完成！"
 
-st.title(page_title)
 
-query = st.text_input(search_label, placeholder=search_placeholder)
+st.title(title)
 
-if 'search_results' not in st.session_state:
+query = st.text_input("Search / 搜尋")
+
+if "search_results" not in st.session_state:
+
     st.session_state.search_results = None
 
 
@@ -85,11 +112,12 @@ if 'search_results' not in st.session_state:
 if st.button(search_button):
 
     if not query:
-        st.warning("Please enter keywords")
+
+        st.warning("請輸入關鍵字")
 
     else:
 
-        st.info(loading_text)
+        st.info("正在抓取新聞...")
 
         try:
 
@@ -100,7 +128,9 @@ if st.button(search_button):
             precise_query = query
 
             if re.search(r'[\u4e00-\u9fff]', query):
+
                 precise_query = f'"{query}"'
+
 
             # ===== NewsData API =====
             url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10"
@@ -111,23 +141,24 @@ if st.button(search_button):
 
                 data = r.json()
 
-                for item in data.get("results", []):
+                for item in data.get("results",[]):
+
+                    link = item.get("link")
 
                     img_url = item.get("image_url")
 
                     if not img_url:
-                        img_url = extract_image_from_article(item.get("link"))
 
-                    desc = item.get("description", "")
+                        img_url = extract_image_from_article(link)
 
                     results.append({
 
-                        "title": item.get("title"),
-                        "description": desc,
-                        "source": item.get("source_id"),
-                        "date": item.get("pubDate"),
-                        "link": item.get("link"),
-                        "image": img_url
+                        "title":item.get("title"),
+                        "desc":item.get("description"),
+                        "source":item.get("source_id"),
+                        "date":item.get("pubDate"),
+                        "link":link,
+                        "image":img_url
                     })
 
 
@@ -136,7 +167,7 @@ if st.button(search_button):
 
             url_google = f"https://news.google.com/rss/search?q={google_query}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
 
-            r = requests.get(url_google, timeout=15)
+            r = requests.get(url_google,timeout=15)
 
             if r.status_code == 200:
 
@@ -145,44 +176,56 @@ if st.button(search_button):
                 for item in root.findall(".//item")[:10]:
 
                     title_raw = item.find("title").text
+
                     link = item.find("link").text
+
                     pub = item.find("pubDate").text
+
                     desc_raw = item.find("description").text
 
-                    soup = BeautifulSoup(desc_raw, 'html.parser')
+                    # 取得真正新聞網址
+                    real_link = get_real_news_url(link)
+
+                    soup = BeautifulSoup(desc_raw,'html.parser')
+
                     clean_desc = soup.get_text()
 
                     match = re.search(r' - (.+?)(?=\s*\(|$)', title_raw)
 
                     source = match.group(1) if match else "Google News"
 
-                    title = re.sub(r' - .+$', '', title_raw)
+                    title = re.sub(r' - .+$','',title_raw)
 
-                    img_url = extract_image_from_article(link)
+                    img_url = extract_image_from_article(real_link)
 
                     results.append({
 
-                        "title": title,
-                        "description": clean_desc,
-                        "source": source,
-                        "date": pub,
-                        "link": link,
-                        "image": img_url
+                        "title":title,
+                        "desc":clean_desc,
+                        "source":source,
+                        "date":pub,
+                        "link":real_link,
+                        "image":img_url
                     })
 
 
             # ===== 去重 =====
-            unique = {r["link"]: r for r in results}.values()
+            unique = {r["link"]:r for r in results}.values()
 
-            # ===== 時間排序 =====
+
+            # ===== 排序 =====
             def parse_date(d):
 
                 try:
+
                     return parser.parse(d)
+
                 except:
+
                     return datetime.datetime.min
 
-            sorted_results = sorted(unique, key=lambda x: parse_date(x["date"]), reverse=True)
+
+            sorted_results = sorted(unique,key=lambda x:parse_date(x["date"]),reverse=True)
 
             st.session_state.search_results = sorted_results
 
@@ -192,7 +235,7 @@ if st.button(search_button):
 
         else:
 
-            st.success(success_text)
+            st.success("搜尋完成")
 
 
 # ===== 顯示結果 =====
@@ -200,17 +243,19 @@ if st.session_state.search_results:
 
     for article in st.session_state.search_results:
 
-        col1, col2 = st.columns([1,5])
+        col1,col2 = st.columns([1,5])
 
         with col1:
 
             if article["image"]:
 
                 try:
+
                     st.image(article["image"], width="stretch")
 
                 except:
-                    st.image("https://via.placeholder.com/120?text=Image")
+
+                    st.image("https://via.placeholder.com/120")
 
             else:
 
@@ -220,8 +265,9 @@ if st.session_state.search_results:
 
             st.markdown(f"### {article['title']}")
 
-            if article["description"]:
-                st.write(article["description"][:300])
+            if article["desc"]:
+
+                st.write(article["desc"][:300])
 
             st.caption(f"{article['source']} | {article['date']}")
 
