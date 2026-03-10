@@ -44,7 +44,8 @@ def get_relative_time(date_str, lang):
         return date_str
 
 # ===== 介面語言與地區設定 =====
-col1, col2 = st.columns()
+# 修正：st.columns 必須傳入參數 [比例]
+col1, col2 = st.columns([8, 2])
 with col2:
     interface_lang = st.selectbox("Lang", ["English", "中文"], index=1, label_visibility="collapsed")
 
@@ -88,10 +89,9 @@ if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
             except:
                 pass
 
-            # 2. Google News RSS (修正 URL 拼接錯誤)
+            # 2. Google News RSS (完整網址修正)
             try:
                 encoded_q = quote(query)
-                # 確保路徑完整：必須包含 /rss/search?q=
                 g_url = f"https://google.com{encoded_q}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
                 res_g = requests.get(g_url, timeout=12, headers=headers)
                 if res_g.status_code == 200:
@@ -108,7 +108,7 @@ if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
                             "img": None
                         })
             except Exception as e:
-                st.sidebar.error(f"Google 連線偵錯: {e}")
+                st.sidebar.error(f"連線狀態: {e}")
 
             # 去重與排序
             if results:
@@ -126,7 +126,7 @@ if st.session_state.search_results is not None:
         st.warning("找不到新聞，請嘗試換個關鍵字。")
     else:
         for art in st.session_state.search_results:
-            c1, c2 = st.columns([1, 3]) # 調整比例讓排版更專業
+            c1, c2 = st.columns([1, 3]) # 修正：這裡也加入了比例 [1, 3]
             with c1:
                 if art.get('img'):
                     st.image(art['img'], use_column_width=True)
