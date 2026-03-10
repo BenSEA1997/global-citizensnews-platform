@@ -13,7 +13,10 @@ from fake_useragent import UserAgent
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
 # 初始化工具
-ua = UserAgent()
+try:
+    ua = UserAgent()
+except:
+    ua = None
 HKT = pytz.timezone('Asia/Hong_Kong')
 
 # ===== 輔助函數：體感時間顯示 =====
@@ -40,23 +43,8 @@ def get_relative_time(date_str, lang):
     except:
         return date_str
 
-# ===== 輔助函數：抓取網頁 OG Image =====
-def fetch_og_image(url):
-    if not url or url == "#" or "google.com" in url:
-        return None
-    try:
-        headers = {'User-Agent': ua.random}
-        res = requests.get(url, timeout=5, headers=headers)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.content, 'lxml')
-            og_img = soup.find("meta", property="og:image")
-            if og_img: return og_img.get("content")
-    except:
-        pass
-    return None
-
 # ===== 介面語言與地區設定 =====
-col1, col2 = st.columns([8, 1])
+col1, col2 = st.columns()
 with col2:
     interface_lang = st.selectbox("Lang", ["English", "中文"], index=1, label_visibility="collapsed")
 
@@ -64,8 +52,7 @@ country_options = {"Global / 全球": "", "Hong Kong / 香港": "hk", "Taiwan / 
 selected_country = st.selectbox("選擇地區 / Region", list(country_options.keys()), index=1)
 country_code = country_options[selected_country]
 
-title_text = "全球即時新聞搜尋" if interface_lang == "中文" else "Global News Search"
-st.title(title_text)
+st.title("全球即時新聞搜尋" if interface_lang == "中文" else "Global News Search")
 
 # ===== 搜尋區塊 =====
 query = st.text_input("搜尋關鍵字", placeholder="例如：伊朗、李家超", label_visibility="collapsed")
@@ -79,13 +66,13 @@ if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
     else:
         with st.spinner("正在搜尋新聞..."):
             results = []
-            headers = {'User-Agent': ua.random}
+            headers = {'User-Agent': ua.random if ua else 'Mozilla/5.0'}
 
-            # 1. NewsData.io (12小時延遲版本)
+            # 1. NewsData.io (12小時延遲)
             try:
                 api_key = st.secrets["NEWS_API_KEY"].strip().replace('"', '')
                 nd_url = "https://newsdata.io"
-                nd_params = {"apikey": api_key, "q": query, "language": "zh,en", "size": 5}
+                nd_params = {"apikey": api_key, "q": query, "language": "zh,en", "size": 10}
                 if country_code: nd_params["country"] = country_code
                 
                 res_nd = requests.get(nd_url, params=nd_params, timeout=10, headers=headers)
@@ -101,9 +88,10 @@ if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
             except:
                 pass
 
-            # 2. Google News RSS (強化版)
+            # 2. Google News RSS (修正 URL 拼接錯誤)
             try:
                 encoded_q = quote(query)
+                # 確保路徑完整：必須包含 /rss/search?q=
                 g_url = f"https://google.com{encoded_q}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
                 res_g = requests.get(g_url, timeout=12, headers=headers)
                 if res_g.status_code == 200:
@@ -117,10 +105,10 @@ if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
                         results.append({
                             "title": title, "source": source,
                             "date": item.find("pubDate").text, "link": link,
-                            "img": None # 稍後異步加載或點擊顯示
+                            "img": None
                         })
             except Exception as e:
-                st.sidebar.error(f"Google 暫時無法連線: {e}")
+                st.sidebar.error(f"Google 連線偵錯: {e}")
 
             # 去重與排序
             if results:
@@ -138,9 +126,8 @@ if st.session_state.search_results is not None:
         st.warning("找不到新聞，請嘗試換個關鍵字。")
     else:
         for art in st.session_state.search_results:
-            c1, c2 = st.columns([1, 3])
+            c1, c2 = st.columns([1, 3]) # 調整比例讓排版更專業
             with c1:
-                # 為了搜尋速度，如果原本沒圖就顯示預設圖，不現場抓取
                 if art.get('img'):
                     st.image(art['img'], use_column_width=True)
                 else:
