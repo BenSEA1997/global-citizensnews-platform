@@ -4,6 +4,7 @@ import re
 import datetime
 from xml.etree import ElementTree as ET
 from urllib.parse import quote
+from dateutil import parser  # 用來正確解析各種日期格式
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
@@ -54,7 +55,6 @@ else:
     search_tip = "提示：人名或專有名詞建議用引號包住，例如 \"李家超\" 或 \"伊朗核協議\""
 
 st.title(page_title)
-
 st.caption(search_tip)
 
 # ===== 搜尋區塊 =====
@@ -70,79 +70,114 @@ if st.button(search_button):
         st.info(loading_text)
         try:
             api_key = st.secrets["NEWS_API_KEY"]
-            
             results = []
-            
+
             # 自動精準處理中文名字
             precise_query = query
             if re.search(r'[\u4e00-\u9fff]', query):
                 precise_query = f'"{query}"'
-            
+
             # NewsData.io 搜尋
-            url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&country={country_code}&size=10"
-            response = requests.get(url_nd, timeout=15)
-            if response.status_code == 200:
-                data = response.json()
-                results.extend(data.get("results", []))
+            url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10"
+            response_nd = requests.get(url_nd, timeout=15)
+            if response_nd.status_code == 200:
+                data = response_nd.json()
+                for item in data.get("results", []):
+                    img_url = item.get("image_url")
+                    if img_url and img_url.strip() == "":
+                        img_url = None
+
+                    results.append({
+                        "title": item.get("title", ""),
+                        "description": item.get("description", item.get("content", "")[:300]),
+                        "source_id": item.get("source_id", "NewsData"),
+                        "pubDate": item.get("pubDate"),
+                        "link": item.get("link", "#"),
+                        "image_url": img_url
+                    })
 
             # Google News RSS 補充
             google_query = quote(query)
             url_google = f"https://news.google.com/rss/search?q={google_query}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
-            response = requests.get(url_google, timeout=15)
-            if response.status_code == 200:
-                root = ET.fromstring(response.content)
+            response_google = requests.get(url_google, timeout=15)
+            if response_google.status_code == 200:
+                root = ET.fromstring(response_google.content)
                 for item in root.findall(".//item")[:10]:
-                    title = item.find("title").text
-                    link = item.find("link").text
-                    pub = item.find("pubDate").text
-                    match = re.search(r' - (.+?)(?=\s*\(|$)', title)
-                    source = match.group(1).strip() if match else "新聞來源"
-                    title = re.sub(r' - .+$', '', title).strip()
-                    results.append({"title": title, "description": " ", "source_id": source, "pubDate": pub, "link": link})
+                    title_raw = item.find("title").text or ""
+                    link = item.find("link").text or "#"
+                    pub = item.find("pubDate").text or ""
+                    desc = item.find("description").text or ""
 
-            # 去重 + 按時間排序（從新到舊）
-            unique_results = {r['link']: r for r in results if r['link']}.values()
-            sorted_results = sorted(unique_results, key=lambda x: x.get('pubDate', ''), reverse=True)
+                    match = re.search(r' - (.+?)(?=\s*\(|$)', title_raw)
+                    source = match.group(1).strip() if match else "Google News"
+                    title = re.sub(r' - .+$', '', title_raw).strip()
+
+                    results.append({
+                        "title": title,
+                        "description": desc[:300],
+                        "source_id": source,
+                        "pubDate": pub,
+                        "link": link,
+                        "image_url": None
+                    })
+
+            # 去重 + 按時間排序（最新 → 最舊）
+            unique_results = {r['link']: r for r in results if r.get('link') and r['link'] != "#"}.values()
+
+            def parse_date(date_str):
+                if not date_str:
+                    return datetime.datetime.min
+                try:
+                    return parser.parse(date_str)
+                except:
+                    return datetime.datetime.min
+
+            sorted_results = sorted(
+                unique_results,
+                key=lambda x: parse_date(x.get('pubDate', '')),
+                reverse=True
+            )
 
             st.session_state.search_results = sorted_results
+
+        except requests.Timeout:
+            st.error(error_timeout)
         except Exception as e:
             st.error(f"{error_generic}: {str(e)}")
-            st.session_state.search_results = None
+        else:
+            st.success(success_text)
 
-# 顯示搜尋結果（含真實圖片）
+# ===== 顯示結果 =====
 if st.session_state.search_results is not None:
     articles = st.session_state.search_results
     st.subheader("搜尋結果" if interface_lang == "中文" else "Search Results")
+
     if not articles:
         st.warning(no_results)
     else:
         for article in articles:
             title = article.get('title', '無標題' if interface_lang == "中文" else 'No title')
-            desc = article.get('description', '無描述' if interface_lang == "中文" else 'No description')
+            desc = article.get('description', '')
             source = article.get('source_id', '未知' if interface_lang == "中文" else 'Unknown')
             pub = article.get('pubDate', '未知' if interface_lang == "中文" else 'Unknown')
             link = article.get('link', '#')
-            
+            img_url = article.get('image_url')
+
             col1, col2 = st.columns([1, 5])
             with col1:
-                # 用新聞標題搜尋真實圖片
-                try:
-                    # 呼叫 search_images 工具抓圖片
-                    image_results = search_images(title, number_of_images=1)
-                    if image_results and len(image_results) > 0:
-                        image_url = image_results[0]['image_url']
-                        st.image(image_url, width=100)
-                    else:
-                        st.image("https://via.placeholder.com/100x100?text=News", width=100)
-                except Exception as e:
-                    st.image("https://via.placeholder.com/100x100?text=News", width=100)
-                    st.caption(f"圖片載入失敗: {str(e)}")
-            
+                if img_url:
+                    try:
+                        st.image(img_url, width=120)
+                    except:
+                        st.image("https://via.placeholder.com/120?text=News", width=120)
+                else:
+                    st.image("https://via.placeholder.com/120?text=News", width=120)
+
             with col2:
                 st.markdown(f"**{title}**")
-                st.write(desc)
+                if desc:
+                    st.write(desc + "..." if len(desc) > 250 else desc)
                 st.caption(f"{source} | {pub}")
                 st.markdown(f"[閱讀全文 / Read full article]({link})")
-            st.divider()
 
-st.success(success_text)
+            st.divider()
