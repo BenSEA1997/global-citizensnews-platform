@@ -21,32 +21,22 @@ HKT = pytz.timezone('Asia/Hong_Kong')
 
 # ===== 輔助函數：體感時間顯示 =====
 def get_relative_time(date_str, lang):
-    if not date_str:
-        return "未知" if lang == "中文" else "Unknown"
+    if not date_str: return "未知"
     try:
         dt = parser.parse(date_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=pytz.UTC)
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=pytz.UTC)
         now = datetime.datetime.now(pytz.UTC)
         diff = now - dt
-        seconds = diff.total_seconds()
-        if seconds < 60: return "現在" if lang == "中文" else "Just now"
-        elif seconds < 3600:
-            mins = int(seconds // 60)
-            return f"{mins} 分鐘前" if lang == "中文" else f"{mins}m ago"
-        elif seconds < 86400:
-            hours = int(seconds // 3600)
-            return f"{hours} 小時前" if lang == "中文" else f"{hours}h ago"
-        else:
-            days = int(seconds // 86400)
-            return f"{days} 天前" if lang == "中文" else f"{days}d ago"
-    except:
-        return date_str
+        sec = diff.total_seconds()
+        if sec < 60: return "現在"
+        elif sec < 3600: return f"{int(sec//60)} 分鐘前"
+        elif sec < 86400: return f"{int(sec//3600)} 小時前"
+        else: return f"{int(sec//86400)} 天前"
+    except: return date_str
 
-# ===== 介面語言與地區設定 =====
-# 修正：st.columns 必須傳入參數 [比例]
-col1, col2 = st.columns([8, 2])
-with col2:
+# ===== 介面佈局 =====
+col_top1, col_top2 = st.columns([8, 1])
+with col_top2:
     interface_lang = st.selectbox("Lang", ["English", "中文"], index=1, label_visibility="collapsed")
 
 country_options = {"Global / 全球": "", "Hong Kong / 香港": "hk", "Taiwan / 台灣": "tw", "China / 大陸": "cn"}
@@ -65,20 +55,19 @@ if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
     if not query:
         st.error("請輸入關鍵字")
     else:
-        with st.spinner("正在搜尋新聞..."):
+        with st.spinner("正在搜尋多個新聞來源..."):
             results = []
-            headers = {'User-Agent': ua.random if ua else 'Mozilla/5.0'}
+            headers = {'User-Agent': ua.random if ua else 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
 
-            # 1. NewsData.io (12小時延遲)
+            # 1. NewsData.io (12h Delay)
             try:
                 api_key = st.secrets["NEWS_API_KEY"].strip().replace('"', '')
-                nd_url = "https://newsdata.io"
                 nd_params = {"apikey": api_key, "q": query, "language": "zh,en", "size": 10}
                 if country_code: nd_params["country"] = country_code
-                
-                res_nd = requests.get(nd_url, params=nd_params, timeout=10, headers=headers)
+                res_nd = requests.get("https://newsdata.io", params=nd_params, timeout=10, headers=headers)
                 if res_nd.status_code == 200:
-                    for item in res_nd.json().get("results", []):
+                    data = res_nd.json()
+                    for item in data.get("results", []):
                         results.append({
                             "title": item.get("title", ""),
                             "source": item.get("source_id", "NewsData"),
@@ -89,39 +78,30 @@ if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
             except:
                 pass
 
-                       # 2. Google News RSS (拆分拼接，防止路徑丟失)
+            # 2. Google News RSS (強化解析安全性)
             try:
-                base_g_url = "https://google.com"
                 encoded_q = quote(query)
-                # 使用 params 方式讓 requests 自動處理拼接，不要用 f-string
-                g_params = {
-                    "q": query,
-                    "hl": "zh-TW",
-                    "gl": "HK",
-                    "ceid": "HK:zh-Hant"
-                }
-                res_g = requests.get(base_g_url, params=g_params, timeout=12, headers=headers)
+                g_url = f"https://google.com{encoded_q}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
+                res_g = requests.get(g_url, timeout=12, headers=headers)
                 
-                if res_g.status_code == 200:
-                    # 偵錯用：如果在側邊欄看到這個，代表連線成功
-                    # st.sidebar.success("Google 連線成功")
-                    root = ET.fromstring(res_g.content)
-                    for item in root.findall(".//item")[:15]:
-                        link = item.find("link").text
-                        title_raw = item.find("title").text or ""
-                        source_match = re.search(r' - (.+)$', title_raw)
-                        source = source_match.group(1) if source_match else "Google News"
-                        title = re.sub(r' - .+$', '', title_raw)
-                        results.append({
-                            "title": title, "source": source,
-                            "date": item.find("pubDate").text, "link": link,
-                            "img": None
-                        })
-                else:
-                    st.sidebar.error(f"Google 狀態碼: {res_g.status_code}")
-            except Exception as e:
-                st.sidebar.error(f"Google 連線偵錯: {e}")
-
+                # 只有當內容以 < 開頭（可能是 XML）時才解析
+                if res_g.status_code == 200 and res_g.content.strip().startswith(b'<'):
+                    try:
+                        root = ET.fromstring(res_g.content)
+                        for item in root.findall(".//item")[:15]:
+                            title_raw = item.find("title").text or ""
+                            source_match = re.search(r' - (.+)$', title_raw)
+                            results.append({
+                                "title": re.sub(r' - .+$', '', title_raw),
+                                "source": source_match.group(1) if source_match else "Google News",
+                                "date": item.find("pubDate").text,
+                                "link": item.find("link").text,
+                                "img": None
+                            })
+                    except:
+                        st.sidebar.warning("Google 回傳格式異常")
+            except:
+                pass
 
             # 去重與排序
             if results:
@@ -133,13 +113,13 @@ if st.button("開始搜尋" if interface_lang == "中文" else "Search"):
             else:
                 st.session_state.search_results = []
 
-# ===== 顯示結果 =====
+# ===== 結果顯示 =====
 if st.session_state.search_results is not None:
     if not st.session_state.search_results:
-        st.warning("找不到新聞，請嘗試換個關鍵字。")
+        st.warning("找不到新聞。建議：\n1. 換個關鍵字\n2. 換個 VPN 節點（如香港）")
     else:
         for art in st.session_state.search_results:
-            c1, c2 = st.columns([1, 3]) # 修正：這裡也加入了比例 [1, 3]
+            c1, c2 = st.columns([1, 4]) # 設定比例：圖片1，文字4
             with c1:
                 if art.get('img'):
                     st.image(art['img'], use_column_width=True)
