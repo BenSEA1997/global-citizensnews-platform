@@ -62,27 +62,31 @@ if st.button(search_button):
             
             # 自動精準處理中文名字
             precise_query = query
-            if re.search(r'[\u4e00-\u9fff]', query):  # 有中文
+            if re.search(r'[\u4e00-\u9fff]', query):
                 precise_query = f'"{query}"'
             
-            # 過去 3 天日期
-            since_date = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
+            # 放寬條件：移除 country 限制，size=20，prioritydomain=top,primary
+            url_precise = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&prioritydomain=top,primary&size=20"
+            st.caption(f"Debug: Calling API with URL: {url_precise}")  # debug 顯示 URL
             
-            # 精準搜尋：主流 + 次主流 + 香港/台灣/大陸 + 中英文 + 20 條
-            url_precise = f"https://newsdata.io/api/1/news?apikey={api_key}&q={precise_query}&language=zh,en&prioritydomain=top,primary&country=hk,tw,cn&since={since_date}&size=20"
             response = requests.get(url_precise, timeout=15)
+            st.caption(f"Debug: Response status: {response.status_code}")  # debug 顯示狀態碼
+            
             if response.status_code == 200:
                 data = response.json()
-                results.extend(data.get("results", []))
-
+                results = data.get("results", [])
+                st.caption(f"Debug: Found {len(results)} news items")  # debug 顯示數量
+            else:
+                st.error(f"API 錯誤：{response.status_code} - {response.text}")
+            
             # 如果結果少於 5 條，自動切模糊搜尋
             if len(results) < 5:
-                url_fuzzy = f"https://newsdata.io/api/1/news?apikey={api_key}&q={query}&language=zh,en&prioritydomain=top,primary&country=hk,tw,cn&since={since_date}&size=20"
+                url_fuzzy = f"https://newsdata.io/api/1/news?apikey={api_key}&q={query}&language=zh,en&prioritydomain=top,primary&size=20"
                 response = requests.get(url_fuzzy, timeout=15)
                 if response.status_code == 200:
                     data = response.json()
                     results.extend(data.get("results", []))
-
+            
             # 按時間排序（從新到舊）
             results = sorted(results, key=lambda x: x.get('pubDate', ''), reverse=True) if results else []
 
