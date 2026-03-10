@@ -6,7 +6,7 @@ from xml.etree import ElementTree as ET
 from urllib.parse import quote
 from dateutil import parser
 from bs4 import BeautifulSoup
-import pytz  # 用來處理時區轉換
+import pytz
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
@@ -29,7 +29,7 @@ country_options = {
     "China / 大陸": "cn"
 }
 country_label = "Select Region / 選擇地區" if interface_lang == "English" else "選擇地區 / Select Region"
-selected_country = st.selectbox(country_label, list(country_options.keys()), index=1)  # 預設香港
+selected_country = st.selectbox(country_label, list(country_options.keys()), index=1)
 country_code = country_options[selected_country]
 
 # ===== 語言文字設定 =====
@@ -44,6 +44,8 @@ if interface_lang == "English":
     error_generic = "An error occurred"
     success_text = "Search completed!"
     search_tip = "Tip: For names or exact phrases, use quotes e.g. \"Li Ka-shing\""
+    x_tab_title = "X (Twitter) Results"
+    x_no_results = "No X posts found."
 else:
     page_title = "全球即時新聞搜尋"
     search_label = "搜尋地點或事件"
@@ -55,54 +57,49 @@ else:
     error_generic = "發生錯誤"
     success_text = "✅ 搜尋完成！"
     search_tip = "提示：人名或專有名詞建議用引號包住，例如 \"李家超\" 或 \"伊朗核協議\""
+    x_tab_title = "X (Twitter) 搜尋結果"
+    x_no_results = "沒有找到相關 X 貼文"
 
 st.title(page_title)
 st.caption(search_tip)
 
-# ===== 香港時區 =====
+# 香港時區
 HKT = pytz.timezone('Asia/Hong_Kong')
 
 # ===== 搜尋區塊 =====
 query = st.text_input(search_label, placeholder=search_placeholder)
 
-if 'search_results' not in st.session_state:
-    st.session_state.search_results = None
+if 'news_results' not in st.session_state:
+    st.session_state.news_results = None
+if 'x_results' not in st.session_state:
+    st.session_state.x_results = None
 
 if st.button(search_button):
-    if not query:
+    if not query.strip():
         st.error("請輸入關鍵字" if interface_lang == "中文" else "Please enter keywords")
     else:
         st.info(loading_text)
         try:
             api_key = st.secrets["NEWS_API_KEY"]
-            results = []
 
-            # 自動精準處理中文名字
-            precise_query = query
-            if re.search(r'[\u4e00-\u9fff]', query):
-                precise_query = f'"{query}"'
-
-            # NewsData.io 搜尋
-            url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10&image=1"
+            # ── NewsData.io ──
+            precise_query = f'"{query}"' if re.search(r'[\u4e00-\u9fff]', query) else query
+            url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10"
             response_nd = requests.get(url_nd, timeout=15)
+            news_results = []
             if response_nd.status_code == 200:
                 data = response_nd.json()
                 for item in data.get("results", []):
-                    img_url = item.get("image_url")
-                    if not img_url or not img_url.strip():
-                        img_url = None
-
                     desc = item.get("description") or item.get("content", "")[:300] or ""
-                    results.append({
+                    news_results.append({
                         "title": item.get("title", ""),
                         "description": desc,
-                        "source_id": item.get("source_id", "NewsData"),
+                        "source": item.get("source_id", "NewsData"),
                         "pubDate": item.get("pubDate"),
-                        "link": item.get("link", "#"),
-                        "image_url": img_url
+                        "link": item.get("link", "#")
                     })
 
-            # Google News RSS 補充
+            # ── Google News RSS ──
             google_query = quote(query)
             url_google = f"https://news.google.com/rss/search?q={google_query}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
             response_google = requests.get(url_google, timeout=15)
@@ -123,44 +120,56 @@ if st.button(search_button):
                     source = match.group(1).strip() if match else "Google News"
                     title = re.sub(r' - .+$', '', title_raw).strip()
 
-                    results.append({
+                    news_results.append({
                         "title": title,
                         "description": clean_desc,
-                        "source_id": source,
+                        "source": source,
                         "pubDate": pub,
-                        "link": link,
-                        "image_url": None
+                        "link": link
                     })
 
-            # 去重
-            unique_results = {r['link']: r for r in results if r.get('link') and r['link'] != "#"}.values()
+            # 去重 + 排序 + 轉香港時間
+            unique_news = {r['link']: r for r in news_results if r['link'] != "#"}.values()
 
-            # 解析日期並統一轉成香港時區
             def parse_date_to_hkt(date_str):
                 if not date_str:
                     return datetime.datetime.min.replace(tzinfo=HKT)
                 try:
                     dt = parser.parse(date_str)
                     if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=pytz.UTC)  # 無時區假設 UTC
-                    dt = dt.astimezone(HKT)  # 轉成香港時區
-                    return dt
+                        dt = dt.replace(tzinfo=pytz.UTC)
+                    return dt.astimezone(HKT)
                 except:
                     return datetime.datetime.min.replace(tzinfo=HKT)
 
-            # 排序（最新在上）
-            sorted_results = sorted(
-                unique_results,
+            sorted_news = sorted(
+                unique_news,
                 key=lambda x: parse_date_to_hkt(x.get('pubDate', '')),
                 reverse=True
             )
 
-            # 額外：把 pubDate 欄位也轉成香港時間字串（顯示用）
-            for r in sorted_results:
+            for r in sorted_news:
                 dt_hkt = parse_date_to_hkt(r['pubDate'])
-                r['pubDate_display'] = dt_hkt.strftime("%Y-%m-%d %H:%M:%S %Z")  # 例如 2026-03-10 20:45:30 HKT
+                r['pubDate_display'] = dt_hkt.strftime("%Y-%m-%d %H:%M:%S %Z")
 
-            st.session_state.search_results = sorted_results
+            st.session_state.news_results = sorted_news
+
+            # ── X (Twitter) 搜尋 ──
+            # 這裡先用簡單的關鍵字搜尋作為示範
+            # 實際上線後建議使用官方 Twitter API v2 或第三方服務
+            # 目前使用公開 RSS 或簡單 requests 方式（僅示範）
+            x_results = []
+            try:
+                # 範例：使用 nitter 或其他公開 RSS（注意：nitter 可能不穩定）
+                # 這裡先用假資料示範，之後再換成真實 X 搜尋
+                x_results = [
+                    {"text": f"範例 X 貼文關於 {query}", "user": "@example", "created_at": "2026-03-10", "link": "https://x.com/example/status/123"},
+                    # 真實整合時可替換成 Twitter API 或其他工具
+                ]
+            except Exception as ex:
+                st.warning(f"X 搜尋暫時無法使用: {str(ex)}")
+
+            st.session_state.x_results = x_results
 
         except requests.Timeout:
             st.error(error_timeout)
@@ -169,10 +178,10 @@ if st.button(search_button):
         else:
             st.success(success_text)
 
-# ===== 顯示搜尋結果 =====
-if st.session_state.search_results is not None:
-    articles = st.session_state.search_results
+# ===== 顯示新聞結果 =====
+if st.session_state.news_results is not None:
     st.subheader("搜尋結果" if interface_lang == "中文" else "Search Results")
+    articles = st.session_state.news_results
 
     if not articles:
         st.warning(no_results)
@@ -180,29 +189,30 @@ if st.session_state.search_results is not None:
         for article in articles:
             title = article.get('title', '無標題' if interface_lang == "中文" else 'No title')
             desc = article.get('description', '')
-            source = article.get('source_id', '未知' if interface_lang == "中文" else 'Unknown')
-            pub = article.get('pubDate_display', article.get('pubDate', '未知' if interface_lang == "中文" else 'Unknown'))
+            source = article.get('source', '未知' if interface_lang == "中文" else 'Unknown')
+            pub = article.get('pubDate_display', '未知' if interface_lang == "中文" else 'Unknown')
             link = article.get('link', '#')
-            img_url = article.get('image_url')
 
-            col1, col2 = st.columns([1, 5])
-            with col1:
-                if img_url:
-                    try:
-                        st.image(img_url, use_column_width=True)
-                        st.caption("真實新聞圖片")
-                    except Exception as e:
-                        st.image("https://via.placeholder.com/120?text=News+Fail", width=120)
-                        st.caption(f"圖片載入失敗: {str(e)[:50]}")
-                else:
-                    st.image("https://via.placeholder.com/120?text=No+Image", width=120)
-                    st.caption("無圖片")
-
-            with col2:
-                st.markdown(f"**{title}**")
-                if desc:
-                    st.write(desc + "..." if len(desc) > 250 else desc)
-                st.caption(f"{source} | {pub}")
-                st.markdown(f"[閱讀全文 / Read full article]({link})")
-
+            st.markdown(f"**{title}**")
+            if desc:
+                st.write(desc + "..." if len(desc) > 250 else desc)
+            st.caption(f"{source} | {pub}")
+            st.markdown(f"[閱讀全文 / Read full article]({link})")
             st.divider()
+
+# ===== X 搜尋結果（Tab 或分區顯示） =====
+if st.session_state.x_results is not None:
+    st.subheader(x_tab_title)
+    x_posts = st.session_state.x_results
+
+    if not x_posts:
+        st.info(x_no_results)
+    else:
+        for post in x_posts:
+            st.markdown(f"**{post.get('user', '@unknown')}** · {post.get('created_at', '未知')}")
+            st.write(post.get('text', '無內容'))
+            if post.get('link'):
+                st.markdown(f"[查看貼文]({post['link']})")
+            st.divider()
+
+st.caption("目前 X 搜尋為示範階段，未來將整合更穩定的 X API")
