@@ -5,7 +5,7 @@ import datetime
 from xml.etree import ElementTree as ET
 from urllib.parse import quote
 from dateutil import parser
-from bs4 import BeautifulSoup  # 新增：用來清理 Google RSS 的 HTML description
+from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
 
@@ -78,14 +78,16 @@ if st.button(search_button):
             if re.search(r'[\u4e00-\u9fff]', query):
                 precise_query = f'"{query}"'
 
-            # NewsData.io 搜尋（description 通常乾淨）
-            url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10"
+            # NewsData.io 搜尋：size 保留 10 + 只取有圖片的文章
+            url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10&image=1"
             response_nd = requests.get(url_nd, timeout=15)
             if response_nd.status_code == 200:
                 data = response_nd.json()
                 for item in data.get("results", []):
                     img_url = item.get("image_url")
-                    if img_url and img_url.strip() == "":
+                    if img_url and img_url.strip():
+                        pass
+                    else:
                         img_url = None
 
                     desc = item.get("description", item.get("content", "")[:300])
@@ -98,7 +100,7 @@ if st.button(search_button):
                         "image_url": img_url
                     })
 
-            # Google News RSS 補充（重點清理 description）
+            # Google News RSS 補充（description 已清理）
             google_query = quote(query)
             url_google = f"https://news.google.com/rss/search?q={google_query}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
             response_google = requests.get(url_google, timeout=15)
@@ -108,14 +110,11 @@ if st.button(search_button):
                     title_raw = item.find("title").text or ""
                     link = item.find("link").text or "#"
                     pub = item.find("pubDate").text or ""
-
-                    # 清理 description：移除 HTML，只取文字，並移除最後的 "See more..." 連結
                     desc_raw = item.find("description").text or ""
+
                     soup = BeautifulSoup(desc_raw, 'html.parser')
-                    # 移除最後一個 <a>（通常是 Google 的連結）
                     if soup.find_all('a'):
                         soup.find_all('a')[-1].decompose()
-                    # 取出純文字，並移除多餘空白
                     clean_desc = soup.get_text(separator=' ', strip=True)[:300]
 
                     match = re.search(r' - (.+?)(?=\s*\(|$)', title_raw)
@@ -131,7 +130,7 @@ if st.button(search_button):
                         "image_url": None
                     })
 
-            # 去重 + 排序
+            # 去重 + 按時間排序（最新在上）
             unique_results = {r['link']: r for r in results if r.get('link') and r['link'] != "#"}.values()
 
             def parse_date(date_str):
@@ -157,7 +156,7 @@ if st.button(search_button):
         else:
             st.success(success_text)
 
-# ===== 顯示結果 =====
+# ===== 顯示搜尋結果 =====
 if st.session_state.search_results is not None:
     articles = st.session_state.search_results
     st.subheader("搜尋結果" if interface_lang == "中文" else "Search Results")
@@ -177,11 +176,14 @@ if st.session_state.search_results is not None:
             with col1:
                 if img_url:
                     try:
-                        st.image(img_url, width=120)
-                    except:
-                        st.image("https://via.placeholder.com/120?text=News", width=120)
+                        st.image(img_url, use_column_width=True)
+                        st.caption("真實新聞圖片")
+                    except Exception as e:
+                        st.image("https://via.placeholder.com/120?text=News+Fail", width=120)
+                        st.caption(f"圖片載入失敗: {str(e)[:50]}")
                 else:
-                    st.image("https://via.placeholder.com/120?text=News", width=120)
+                    st.image("https://via.placeholder.com/120?text=No+Image", width=120)
+                    st.caption("無圖片")
 
             with col2:
                 st.markdown(f"**{title}**")
