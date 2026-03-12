@@ -3,5 +3,3 @@ requests
 python-dateutil
 beautifulsoup4
 pytz
-lxml
-fake-useragent
