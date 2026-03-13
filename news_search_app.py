@@ -3,6 +3,7 @@ import feedparser
 import datetime
 from dateutil import parser as date_parser
 import pytz
+from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="全球新聞搜尋", page_icon="🌍", layout="wide")
 
@@ -54,12 +55,13 @@ else:
     world_chinese = "世界華文"
     world_english = "世界英文"
 
-st.title(page_title)
+# 自訂標題（無小符號）
+st.markdown(f"<h1 style='text-align: center;'>{page_title}</h1>", unsafe_allow_html=True)
 st.caption(search_tip)
 
-# ===== 白名單 RSS 清單（全部保留，按你提供的清單整理） =====
+# ===== 白名單 RSS 清單（香港完整，其他精簡） =====
 rss_sources = {
-    "香港": [
+    "香港": [  # 完整保留你的清單
         {"name": "香港電台 (RTHK)", "rss": "https://news.rthk.hk/rthk/ch/rss.htm"},
         {"name": "政府新聞網", "rss": "https://www.news.gov.hk/chi/rss.xml"},
         {"name": "明報", "rss": "https://news.mingpao.com/php/rss.php"},
@@ -85,67 +87,53 @@ rss_sources = {
         {"name": "獨立媒體 (InMediaHK)", "rss": "https://www.inmediahk.net/rss"},
         {"name": "大紀元", "rss": "https://www.epochtimes.com/gb/rss.htm"},
     ],
-    "台灣": [
+    "台灣": [  # 精簡到 8 個
         {"name": "聯合報", "rss": "https://udn.com/rssfeed/news/2/7225?ch=news"},
         {"name": "自由時報", "rss": "https://news.ltn.com.tw/rss"},
         {"name": "中國時報", "rss": "https://www.chinatimes.com/realtimenews/?chdtv=rss"},
-        {"name": "NOWnews", "rss": "https://www.nownews.com/rss"},
-        {"name": "ETtoday", "rss": "https://www.ettoday.net/news/newslist.rss"},
         {"name": "中央社", "rss": "https://www.cna.com.tw/rss"},
-        {"name": "經濟日報", "rss": "https://money.udn.com/rssfeed/5591/1001?ch=news"},
-        {"name": "工商時報", "rss": "https://ctee.com.tw/rss"},
-        {"name": "三立新聞", "rss": "https://www.setn.com/rss.aspx?PageGroupID=1"},
-        {"name": "民視新聞", "rss": "https://www.ftvnews.com.tw/rss"},
-        {"name": "TVBS 新聞", "rss": "https://news.tvbs.com.tw/rss"},
-        {"name": "中天新聞", "rss": "https://www.ctitv.com.tw/rss"},
+        {"name": "ETtoday", "rss": "https://www.ettoday.net/news/newslist.rss"},
         {"name": "關鍵評論網", "rss": "https://www.thenewslens.com/rss"},
         {"name": "報導者", "rss": "https://www.twreporter.org/rss"},
+        {"name": "TVBS 新聞", "rss": "https://news.tvbs.com.tw/rss"},
     ],
-    "中國大陸": [
+    "中國大陸": [  # 精簡到 8 個
         {"name": "人民日報", "rss": "http://paper.people.com.cn/rmrb/rss.xml"},
         {"name": "新華社", "rss": "http://www.xinhuanet.com/english/rss.xml"},
-        {"name": "央視 / CGTN", "rss": "https://news.cctv.com/rss/index.xml"},
-        {"name": "求是", "rss": "http://www.qstheory.cn/rss"},
         {"name": "中國日報", "rss": "https://www.chinadaily.com.cn/rss/china_rss.xml"},
         {"name": "環球時報", "rss": "https://www.globaltimes.cn/rss.xml"},
         {"name": "澎湃新聞", "rss": "https://www.thepaper.cn/rss"},
         {"name": "財新網", "rss": "https://www.caixin.com/rss"},
         {"name": "界面新聞", "rss": "https://www.jiemian.com/rss"},
         {"name": "21世紀經濟報導", "rss": "https://www.21jingji.com/rss"},
-        {"name": "第一財經", "rss": "https://www.yicai.com/rss"},
     ],
-    "世界華文": [
+    "世界華文": [  # 精簡到 6 個
         {"name": "聯合早報", "rss": "https://www.zaobao.com.sg/rss"},
-        {"name": "星洲網", "rss": "https://www.sinchew.com.my/rss"},
         {"name": "BBC 中文", "rss": "https://feeds.bbci.co.uk/zhongwen/trad/rss.xml"},
         {"name": "紐約時報中文", "rss": "https://cn.nytimes.com/rss"},
-        {"name": "華爾街日報中文", "rss": "https://cn.wsj.com/zh-hant/rss"},
         {"name": "德國之聲中文", "rss": "https://rss.dw.com/rdf/rss-chi-all"},
         {"name": "法廣中文", "rss": "https://www.rfi.fr/cn/rss"},
         {"name": "SBS 中文", "rss": "https://www.sbs.com.au/language/chinese/feed"},
-        {"name": "ABC 中文", "rss": "https://www.abc.net.au/news/chinese/feed"},
     ],
-    "世界英文": [
+    "世界英文": [  # 精簡到 8 個
         {"name": "Reuters", "rss": "https://www.reuters.com/rss"},
-        {"name": "AP News", "rss": "https://apnews.com/index.rss"},
-        {"name": "AFP", "rss": "https://www.afp.com/en/rss-feeds"},
-        {"name": "Bloomberg", "rss": "https://www.bloomberg.com/feed"},
-        {"name": "The New York Times", "rss": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"},
-        {"name": "The Washington Post", "rss": "https://www.washingtonpost.com/rss"},
-        {"name": "The Guardian", "rss": "https://www.theguardian.com/rss"},
-        {"name": "Financial Times", "rss": "https://www.ft.com/rss"},
         {"name": "BBC News", "rss": "https://feeds.bbci.co.uk/news/rss.xml"},
+        {"name": "The Guardian", "rss": "https://www.theguardian.com/rss"},
+        {"name": "The New York Times", "rss": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"},
         {"name": "Al Jazeera English", "rss": "https://www.aljazeera.com/xml/rss/all.xml"},
+        {"name": "Financial Times", "rss": "https://www.ft.com/rss"},
+        {"name": "Bloomberg", "rss": "https://www.bloomberg.com/feed"},
+        {"name": "AP News", "rss": "https://apnews.com/index.rss"},
     ]
 }
 
-# ===== 來源分類過濾（刪除「全部來源」） =====
+# ===== 來源分類過濾（無「全部來源」） =====
 source_category = st.selectbox(
-    "來源分類",
+    source_filter_label,
     [hk_sources, tw_sources, cn_sources, world_chinese, world_english]
 )
 
-# 決定要讀哪一組
+# 決定分類
 category_map = {
     hk_sources: "香港",
     tw_sources: "台灣",
@@ -164,15 +152,27 @@ if 'search_results' not in st.session_state:
 @st.cache_data(ttl=600)  # 快取 10 分鐘
 def fetch_rss_articles(selected_group, query):
     all_articles = []
-    for source in rss_sources[selected_group]:
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    total_sources = len(rss_sources[selected_group])
+    for i, source in enumerate(rss_sources[selected_group]):
+        status_text.text(f"正在抓取 {source['name']} ({i+1}/{total_sources})...")
+        progress_bar.progress((i + 1) / total_sources)
+
         try:
             feed = feedparser.parse(source["rss"])
             for entry in feed.entries:
                 title = entry.get("title", "無標題")
                 link = entry.get("link", "#")
                 published = entry.get("published", entry.get("updated", None))
-                summary = entry.get("summary", entry.get("description", ""))[:300]
+                summary_raw = entry.get("summary", entry.get("description", ""))[:500]
 
+                # 清理 HTML
+                soup = BeautifulSoup(summary_raw, 'html.parser')
+                summary = soup.get_text(separator=' ', strip=True)[:300]
+
+                # 放寬關鍵字匹配
                 if query.lower() in title.lower() or query.lower() in summary.lower():
                     dt = None
                     if published:
@@ -193,7 +193,10 @@ def fetch_rss_articles(selected_group, query):
                         "category": selected_group
                     })
         except:
-            pass  # 跳過失效 RSS
+            pass
+
+    status_text.empty()
+    progress_bar.empty()
     return all_articles
 
 if st.button(search_button):
@@ -204,7 +207,7 @@ if st.button(search_button):
         try:
             articles = fetch_rss_articles(selected_group, query)
 
-            # 排序（最新在上）
+            # 排序
             def parse_date(article):
                 return article["published"] if article["published"] else datetime.datetime.min.replace(tzinfo=HKT)
 
