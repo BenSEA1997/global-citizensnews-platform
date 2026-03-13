@@ -1,14 +1,14 @@
 import streamlit as st
-import requests
-import re
+import feedparser
 import datetime
-from xml.etree import ElementTree as ET
-from urllib.parse import quote
-from dateutil import parser
-from bs4 import BeautifulSoup
+from dateutil import parser as date_parser
 import pytz
+from urllib.parse import quote
 
 st.set_page_config(page_title="全球即時新聞搜尋", page_icon="🌍", layout="wide")
+
+# 香港時區
+HKT = pytz.timezone('Asia/Hong_Kong')
 
 # ===== 右上角語言切換 =====
 col1, col2 = st.columns([8, 1])
@@ -29,7 +29,7 @@ country_options = {
     "China / 大陸": "cn"
 }
 country_label = "Select Region / 選擇地區" if interface_lang == "English" else "選擇地區 / Select Region"
-selected_country = st.selectbox(country_label, list(country_options.keys()), index=1)  # 預設香港
+selected_country = st.selectbox(country_label, list(country_options.keys()), index=1)
 country_code = country_options[selected_country]
 
 # ===== 語言文字設定 =====
@@ -44,8 +44,13 @@ if interface_lang == "English":
     error_generic = "An error occurred"
     success_text = "Search completed!"
     search_tip = "Tip: For names or exact phrases, use quotes e.g. \"Li Ka-shing\""
-    x_tab_title = "X (Twitter) Results"
-    x_no_results = "No X posts found."
+    source_filter_label = "Source Category"
+    all_sources = "All Sources"
+    hk_sources = "Hong Kong"
+    tw_sources = "Taiwan"
+    cn_sources = "China Mainland"
+    world_chinese = "World Chinese"
+    world_english = "World English"
 else:
     page_title = "全球即時新聞搜尋"
     search_label = "搜尋地點或事件"
@@ -57,22 +62,101 @@ else:
     error_generic = "發生錯誤"
     success_text = "✅ 搜尋完成！"
     search_tip = "提示：人名或專有名詞建議用引號包住，例如 \"李家超\" 或 \"伊朗核協議\""
-    x_tab_title = "X (Twitter) 搜尋結果"
-    x_no_results = "沒有找到相關 X 貼文"
+    source_filter_label = "來源分類"
+    all_sources = "全部來源"
+    hk_sources = "香港"
+    tw_sources = "台灣"
+    cn_sources = "中國大陸"
+    world_chinese = "世界華文"
+    world_english = "世界英文"
 
 st.title(page_title)
 st.caption(search_tip)
 
-# ===== 香港時區 =====
-HKT = pytz.timezone('Asia/Hong_Kong')
+# ===== 白名單 RSS 清單（已整理域名 + RSS 連結） =====
+# 注意：部分 RSS 需透過 rss.app 或官方產生，若官方無 RSS 則用 rss.app 替代連結（你可自行替換）
+
+rss_sources = {
+    "香港": [
+        {"name": "香港電台 (RTHK)", "rss": "https://news.rthk.hk/rthk/ch/rss.htm"},
+        {"name": "政府新聞網", "rss": "https://www.news.gov.hk/chi/rss.xml"},
+        {"name": "明報", "rss": "https://news.mingpao.com/php/rss.php"},
+        {"name": "南華早報 (SCMP)", "rss": "https://www.scmp.com/rss/91/feed"},
+        {"name": "星島日報", "rss": "https://www.singtao.com/rss"},
+        {"name": "東方日報", "rss": "https://orientaldaily.on.cc/rss/news.xml"},
+        {"name": "信報", "rss": "https://www.hkej.com/rss"},
+        {"name": "經濟日報", "rss": "https://www.hket.com/rss"},
+        {"name": "am730", "rss": "https://www.am730.com.hk/rss"},
+        {"name": "香港01", "rss": "https://www.hk01.com/rss"},
+        {"name": "Now 新聞", "rss": "https://news.now.com/home/rss"},
+        {"name": "香港自由新聞 (HKFP)", "rss": "https://hongkongfp.com/feed/"},
+    ],
+    "台灣": [
+        {"name": "聯合報", "rss": "https://udn.com/rssfeed/news/2/7225?ch=news"},
+        {"name": "自由時報", "rss": "https://news.ltn.com.tw/rss"},
+        {"name": "中國時報", "rss": "https://www.chinatimes.com/realtimenews/?chdtv=rss"},
+        {"name": "中央社", "rss": "https://www.cna.com.tw/rss"},
+        {"name": "ETtoday", "rss": "https://www.ettoday.net/news/newslist.rss"},
+        {"name": "關鍵評論網", "rss": "https://www.thenewslens.com/rss"},
+        {"name": "報導者", "rss": "https://www.twreporter.org/rss"},
+    ],
+    "中國大陸": [
+        {"name": "人民日報", "rss": "http://paper.people.com.cn/rmrb/rss.xml"},
+        {"name": "新華社", "rss": "http://www.xinhuanet.com/english/rss.xml"},
+        {"name": "中國日報", "rss": "https://www.chinadaily.com.cn/rss/china_rss.xml"},
+        {"name": "環球時報", "rss": "https://www.globaltimes.cn/rss.xml"},
+        {"name": "澎湃新聞", "rss": "https://www.thepaper.cn/rss"},
+        {"name": "財新網", "rss": "https://www.caixin.com/rss"},
+    ],
+    "世界華文": [
+        {"name": "聯合早報", "rss": "https://www.zaobao.com.sg/rss"},
+        {"name": "星洲網", "rss": "https://www.sinchew.com.my/rss"},
+        {"name": "BBC 中文", "rss": "https://feeds.bbci.co.uk/zhongwen/trad/rss.xml"},
+        {"name": "紐約時報中文", "rss": "https://cn.nytimes.com/rss"},
+        {"name": "華爾街日報中文", "rss": "https://cn.wsj.com/zh-hant/rss"},
+        {"name": "德國之聲中文", "rss": "https://rss.dw.com/rdf/rss-chi-all"},
+        {"name": "法廣中文", "rss": "https://www.rfi.fr/cn/rss"},
+    ],
+    "世界英文": [
+        {"name": "Reuters", "rss": "https://www.reuters.com/rss"},
+        {"name": "AP News", "rss": "https://apnews.com/index.rss"},
+        {"name": "BBC News", "rss": "https://feeds.bbci.co.uk/news/rss.xml"},
+        {"name": "The Guardian", "rss": "https://www.theguardian.com/rss"},
+        {"name": "NYTimes", "rss": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"},
+        {"name": "Washington Post", "rss": "https://www.washingtonpost.com/rss"},
+        {"name": "Financial Times", "rss": "https://www.ft.com/rss"},
+        {"name": "Al Jazeera", "rss": "https://www.aljazeera.com/xml/rss/all.xml"},
+    ]
+}
+
+st.caption("新聞來源：已精選港中台及世界主流媒體 RSS | 時間已轉換為香港時區")
+
+# ===== 來源分類過濾 =====
+source_category = st.selectbox(
+    source_filter_label,
+    [all_sources, hk_sources, tw_sources, cn_sources, world_chinese, world_english]
+)
+
+# 根據選擇決定要讀哪些 RSS
+selected_groups = []
+if source_category == all_sources:
+    selected_groups = list(rss_sources.keys())
+elif source_category == hk_sources:
+    selected_groups = ["香港"]
+elif source_category == tw_sources:
+    selected_groups = ["台灣"]
+elif source_category == cn_sources:
+    selected_groups = ["中國大陸"]
+elif source_category == world_chinese:
+    selected_groups = ["世界華文"]
+elif source_category == world_english:
+    selected_groups = ["世界英文"]
 
 # ===== 搜尋區塊 =====
 query = st.text_input(search_label, placeholder=search_placeholder)
 
-if 'news_results' not in st.session_state:
-    st.session_state.news_results = None
-if 'x_results' not in st.session_state:
-    st.session_state.x_results = None
+if 'search_results' not in st.session_state:
+    st.session_state.search_results = None
 
 if st.button(search_button):
     if not query.strip():
@@ -80,172 +164,76 @@ if st.button(search_button):
     else:
         st.info(loading_text)
         try:
-            api_key = st.secrets["NEWS_API_KEY"]
-            twitter_bearer = st.secrets.get("TWITTER_BEARER_TOKEN", None)
+            all_articles = []
 
-            results = []
+            # 只讀取選中的分類 RSS
+            for group in selected_groups:
+                for source in rss_sources[group]:
+                    try:
+                        feed = feedparser.parse(source["rss"])
+                        for entry in feed.entries:
+                            title = entry.get("title", "無標題")
+                            link = entry.get("link", "#")
+                            published = entry.get("published", entry.get("updated", None))
+                            summary = entry.get("summary", entry.get("description", ""))[:300]
 
-            # 自動精準處理中文名字
-            precise_query = query
-            if re.search(r'[\u4e00-\u9fff]', query):
-                precise_query = f'"{query}"'
+                            # 簡單關鍵字過濾（可加強）
+                            if query.lower() in title.lower() or query.lower() in summary.lower():
+                                dt = None
+                                if published:
+                                    try:
+                                        dt = date_parser.parse(published)
+                                        if dt.tzinfo is None:
+                                            dt = dt.replace(tzinfo=pytz.UTC)
+                                        dt = dt.astimezone(HKT)
+                                    except:
+                                        dt = None
 
-            # NewsData.io 搜尋（移除 image=1，讓結果更多）
-            url_nd = f"https://newsdata.io/api/1/news?apikey={api_key}&q={quote(precise_query)}&language=zh,en&country={country_code}&size=10"
-            response_nd = requests.get(url_nd, timeout=15)
-            if response_nd.status_code == 200:
-                data = response_nd.json()
-                for item in data.get("results", []):
-                    desc = item.get("description") or item.get("content", "")[:300] or ""
-                    results.append({
-                        "title": item.get("title", ""),
-                        "description": desc,
-                        "source": item.get("source_id", "NewsData"),
-                        "pubDate": item.get("pubDate"),
-                        "link": item.get("link", "#"),
-                        "type": "news"
-                    })
+                                all_articles.append({
+                                    "title": title,
+                                    "summary": summary,
+                                    "source": source["name"],
+                                    "published": dt,
+                                    "link": link,
+                                    "category": group
+                                })
+                    except Exception as e:
+                        st.warning(f"來源 {source['name']} 讀取失敗：{str(e)}")
 
-            # Google News RSS 補充
-            google_query = quote(query)
-            url_google = f"https://news.google.com/rss/search?q={google_query}&hl=zh-TW&gl=HK&ceid=HK:zh-Hant"
-            response_google = requests.get(url_google, timeout=15)
-            if response_google.status_code == 200:
-                root = ET.fromstring(response_google.content)
-                for item in root.findall(".//item")[:10]:
-                    title_raw = item.find("title").text or ""
-                    link = item.find("link").text or "#"
-                    pub = item.find("pubDate").text or ""
-                    desc_raw = item.find("description").text or ""
+            # 排序（最新在上）
+            def parse_date(article):
+                return article["published"] if article["published"] else datetime.datetime.min.replace(tzinfo=HKT)
 
-                    soup = BeautifulSoup(desc_raw, 'html.parser')
-                    if soup.find_all('a'):
-                        soup.find_all('a')[-1].decompose()
-                    clean_desc = soup.get_text(separator=' ', strip=True)[:300]
+            sorted_articles = sorted(all_articles, key=parse_date, reverse=True)
 
-                    match = re.search(r' - (.+?)(?=\s*\(|$)', title_raw)
-                    source = match.group(1).strip() if match else "Google News"
-                    title = re.sub(r' - .+$', '', title_raw).strip()
+            # 儲存結果
+            st.session_state.search_results = sorted_articles
 
-                    results.append({
-                        "title": title,
-                        "description": clean_desc,
-                        "source": source,
-                        "pubDate": pub,
-                        "link": link,
-                        "type": "news"
-                    })
-
-            # 去重 + 排序 + 轉香港時間
-            unique_results = {r['link']: r for r in results if r.get('link') and r['link'] != "#"}.values()
-
-            def parse_date_to_hkt(date_str):
-                if not date_str:
-                    return datetime.datetime.min.replace(tzinfo=HKT)
-                try:
-                    dt = parser.parse(date_str)
-                    if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=pytz.UTC)
-                    return dt.astimezone(HKT)
-                except:
-                    return datetime.datetime.min.replace(tzinfo=HKT)
-
-            sorted_results = sorted(
-                unique_results,
-                key=lambda x: parse_date_to_hkt(x.get('pubDate', '')),
-                reverse=True
-            )
-
-            for r in sorted_results:
-                dt_hkt = parse_date_to_hkt(r['pubDate'])
-                r['pubDate_display'] = dt_hkt.strftime("%Y-%m-%d %H:%M:%S %Z")
-
-            st.session_state.news_results = sorted_results
-
-            # X (Twitter) 真實搜尋
-            x_results = []
-            if twitter_bearer:
-                headers = {
-                    "Authorization": f"Bearer {twitter_bearer}"
-                }
-                params = {
-                    "query": f"{query} lang:zh OR lang:en -is:retweet",  # 可調整過濾條件
-                    "tweet.fields": "created_at,author_id,text,lang",
-                    "user.fields": "username,name",
-                    "expansions": "author_id",
-                    "max_results": 10,
-                    "sort_order": "recency"
-                }
-                url = "https://api.twitter.com/2/tweets/search/recent"
-                response = requests.get(url, headers=headers, params=params, timeout=15)
-                if response.status_code == 200:
-                    data = response.json()
-                    users = {u["id"]: u for u in data.get("includes", {}).get("users", [])}
-                    for tweet in data.get("data", []):
-                        user = users.get(tweet["author_id"], {})
-                        created_at = tweet.get("created_at", "")
-                        created_display = "未知"
-                        if created_at:
-                            try:
-                                dt = parser.parse(created_at).astimezone(HKT)
-                                created_display = dt.strftime("%Y-%m-%d %H:%M:%S %Z")
-                            except:
-                                pass
-                        x_results.append({
-                            "text": tweet.get("text", ""),
-                            "user": f"@{user.get('username', 'unknown')}",
-                            "name": user.get("name", ""),
-                            "created_at": created_display,
-                            "link": f"https://x.com/{user.get('username', 'unknown')}/status/{tweet['id']}"
-                        })
-                else:
-                    st.warning(f"X API 錯誤 ({response.status_code}): {response.text}")
-            else:
-                st.warning("未設定 TWITTER_BEARER_TOKEN，請在 secrets 加入")
-
-            st.session_state.x_results = x_results
-
-        except requests.Timeout:
-            st.error(error_timeout)
         except Exception as e:
             st.error(f"{error_generic}: {str(e)}")
         else:
             st.success(success_text)
 
-# ===== 顯示新聞結果 =====
-if st.session_state.news_results is not None:
+# ===== 顯示結果 =====
+if st.session_state.search_results is not None:
     st.subheader("搜尋結果" if interface_lang == "中文" else "Search Results")
-    articles = st.session_state.news_results
+    articles = st.session_state.search_results
 
     if not articles:
         st.warning(no_results)
     else:
         for article in articles:
             title = article.get('title', '無標題' if interface_lang == "中文" else 'No title')
-            desc = article.get('description', '')
+            summary = article.get('summary', '')
             source = article.get('source', '未知' if interface_lang == "中文" else 'Unknown')
-            pub = article.get('pubDate_display', '未知' if interface_lang == "中文" else 'Unknown')
+            category = article.get('category', '')
+            published = article.get('published')
+            pub_display = published.strftime("%Y-%m-%d %H:%M %Z") if published else '未知'
             link = article.get('link', '#')
 
-            st.markdown(f"**{title}**")
-            if desc:
-                st.write(desc + "..." if len(desc) > 250 else desc)
-            st.caption(f"{source} | {pub}")
+            st.markdown(f"**{title}** ({category} - {source})")
+            if summary:
+                st.write(summary + "..." if len(summary) > 250 else summary)
+            st.caption(f"{pub_display}")
             st.markdown(f"[閱讀全文 / Read full article]({link})")
             st.divider()
-
-# ===== 顯示 X 搜尋結果 =====
-if st.session_state.x_results is not None:
-    st.subheader(x_tab_title)
-    x_posts = st.session_state.x_results
-
-    if not x_posts:
-        st.info(x_no_results)
-    else:
-        for post in x_posts:
-            st.markdown(f"**{post['user']}** ({post['name']}) · {post['created_at']}")
-            st.write(post['text'])
-            st.markdown(f"[查看貼文 / View post]({post['link']})")
-            st.divider()
-
-st.caption("新聞來源：NewsData.io + Google News RSS | X 來源：Twitter API v2 | 時間已轉換為香港時區")
