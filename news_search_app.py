@@ -1,212 +1,151 @@
 import streamlit as st
-import feedparser
-import datetime
-from dateutil import parser as date_parser
+import requests
+from datetime import datetime, timedelta
 import pytz
-from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor
+from dateutil import parser as date_parser
 
-st.set_page_config(page_title="全球新聞搜尋", page_icon="🌍", layout="wide")
-
-# 香港時區
+# --- 1. 設定與權重定義 (白名單 Tier) ---
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# 語言切換
-col1, col2 = st.columns([8, 1])
-with col2:
-    interface_lang = st.selectbox("Language / 語言", ["English", "中文"], index=0, label_visibility="collapsed", key="lang_switch")
-
-# 語言設定
-if interface_lang == "English":
-    page_title = "Global News Search"
-    search_label = "Search keywords"
-    search_placeholder = "e.g. Tehran Iran, Li Ka-shing"
-    search_button = "Search"
-    loading_text = "Fetching news..."
-    no_results = "No news found. Try other keywords."
-    error_generic = "An error occurred"
-    success_text = "Search completed!"
-    search_tip = "Tip: All searches are exact match (quotes added automatically)"
-    source_filter_label = "Source Category"
-    hk_sources = "Hong Kong"
-    tw_sources = "Taiwan"
-    cn_sources = "China Mainland"
-    world_chinese = "World Chinese"
-    world_english = "World English"
-    cn_note = "China Mainland media may have fewer international reports. Try World Chinese or English."
-    tw_note = "Taiwan media may have fewer international reports. Try World Chinese or English."
-else:
-    page_title = "全球新聞搜尋"
-    search_label = "搜尋關鍵字"
-    search_placeholder = "例如：伊朗德黑蘭、李家超"
-    search_button = "開始搜尋"
-    loading_text = "正在抓取新聞..."
-    no_results = "沒有找到新聞，請試其他關鍵字"
-    error_generic = "發生錯誤"
-    success_text = "✅ 搜尋完成！"
-    search_tip = "提示：所有搜尋已自動精準匹配（系統已加引號）"
-    source_filter_label = "來源分類"
-    hk_sources = "香港"
-    tw_sources = "台灣"
-    cn_sources = "中國大陸"
-    world_chinese = "世界華文"
-    world_english = "世界英文"
-    cn_note = "中國大陸媒體國際報導較少，請試「世界華文」或「世界英文」分類。"
-    tw_note = "台灣媒體國際報導較少，請試「世界華文」或「世界英文」分類。"
-
-st.markdown(f"<h1 style='text-align: center; margin-bottom: 0;'>{page_title}</h1>", unsafe_allow_html=True)
-st.caption(search_tip)
-
-# 白名單 RSS（香港完整，其他補國際子頻道）
-rss_sources = {
-    "香港": [
-        {"name": "香港電台 (RTHK)", "rss": "https://news.rthk.hk/rthk/ch/rss.htm"},
-        {"name": "明報", "rss": "https://news.mingpao.com/php/rss.php"},
-        {"name": "南華早報 (SCMP)", "rss": "https://www.scmp.com/rss/91/feed"},
-        {"name": "香港01", "rss": "https://www.hk01.com/rss"},
-        {"name": "經濟日報", "rss": "https://www.hket.com/rss"},
-        {"name": "am730", "rss": "https://www.am730.com.hk/rss"},
-        {"name": "香港自由新聞 (HKFP)", "rss": "https://hongkongfp.com/feed/"},
-        {"name": "Now 新聞", "rss": "https://news.now.com/home/rss"},
-        # 你可以繼續加其他香港來源
-    ],
-    "台灣": [
-        {"name": "聯合報", "rss": "https://udn.com/rssfeed/news/2/7225?ch=news"},
-        {"name": "自由時報", "rss": "https://news.ltn.com.tw/rss"},
-        {"name": "中國時報", "rss": "https://www.chinatimes.com/realtimenews/?chdtv=rss"},
-        {"name": "中央社", "rss": "https://www.cna.com.tw/rss"},
-        {"name": "ETtoday", "rss": "https://www.ettoday.net/news/newslist.rss"},
-        {"name": "關鍵評論網", "rss": "https://www.thenewslens.com/rss"},
-        {"name": "聯合報國際", "rss": "https://udn.com/rssfeed/news/2/7227?ch=news"},  # 補國際分類
-        {"name": "中央社國際", "rss": "https://www.cna.com.tw/rss/aopl.aspx"},  # 補國際分類
-    ],
-    "中國大陸": [
-        {"name": "人民日報", "rss": "http://paper.people.com.cn/rmrb/rss.xml"},
-        {"name": "新華社", "rss": "http://www.xinhuanet.com/english/rss.xml"},
-        {"name": "中國日報", "rss": "https://www.chinadaily.com.cn/rss/china_rss.xml"},
-        {"name": "環球時報", "rss": "https://www.globaltimes.cn/rss.xml"},
-        {"name": "澎湃新聞", "rss": "https://www.thepaper.cn/rss"},
-        {"name": "新華社國際", "rss": "http://www.news.cn/world/rss.xml"},  # 補國際分類
-        {"name": "環球時報國際", "rss": "https://www.globaltimes.cn/rss/world.xml"},  # 補國際分類
-    ],
-    "世界華文": [
-        {"name": "聯合早報", "rss": "https://www.zaobao.com.sg/rss"},
-        {"name": "BBC 中文", "rss": "https://feeds.bbci.co.uk/zhongwen/trad/rss.xml"},
-        {"name": "紐約時報中文", "rss": "https://cn.nytimes.com/rss"},
-        {"name": "德國之聲中文", "rss": "https://rss.dw.com/rdf/rss-chi-all"},
-        {"name": "法廣中文", "rss": "https://www.rfi.fr/cn/rss"},
-    ],
-    "世界英文": [
-        {"name": "Reuters", "rss": "https://www.reuters.com/rss"},
-        {"name": "BBC News", "rss": "https://feeds.bbci.co.uk/news/rss.xml"},
-        {"name": "The Guardian", "rss": "https://www.theguardian.com/rss"},
-        {"name": "The New York Times", "rss": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"},
-        {"name": "Al Jazeera English", "rss": "https://www.aljazeera.com/xml/rss/all.xml"},
-    ]
+# 根據您的白名單整理的權重表
+MEDIA_TIERS = {
+    # 香港 Tier 10 (最優先)
+    "rthk.hk": 10, "on.cc": 10, "mingpao.com": 10, "scmp.com": 10, "hkej.com": 10, "hket.com": 10,
+    "stheadline.com": 10, "now.com": 10, "tvb.com": 10, "am730.com.hk": 10, "hk01.com": 10,
+    # 國際/兩岸 Tier 10
+    "bbc.com": 10, "nytimes.com": 10, "reuters.com": 10, "apnews.com": 10, "cna.com.tw": 10,
+    "udn.com": 10, "ltn.com.tw": 10, "people.com.cn": 10, "xinhuanet.com": 10, "zaobao.com": 10,
+    # 其他權重 (可根據需要續加)
 }
 
-# 來源分類過濾（無「全部來源」）
-source_category = st.selectbox(source_filter_label, [hk_sources, tw_sources, cn_sources, world_chinese, world_english])
+# --- 2. 核心搜尋函式 ---
 
-# 決定分類
-category_map = {
-    hk_sources: "香港",
-    tw_sources: "台灣",
-    cn_sources: "中國大陸",
-    world_chinese: "世界華文",
-    world_english: "世界英文"
-}
-selected_group = category_map[source_category]
+def fetch_google_news(query, cx, api_key, lr=None):
+    """從 Google Custom Search 抓取 (負責深度與副頁)"""
+    try:
+        url = "https://googleapis.com"
+        params = {
+            "key": api_key, "cx": cx, "q": query,
+            "dateRestrict": "m1", "num": 10, "hl": "zh-Hant"
+        }
+        if lr: params["lr"] = lr
+        
+        resp = requests.get(url, params=params, timeout=10).json()
+        articles = []
+        for item in resp.get("items", []):
+            domain = item.get("displayLink", "").lower().replace("www.", "")
+            articles.append({
+                "title": item.get("title"),
+                "link": item.get("link"),
+                "source": domain,
+                "summary": item.get("snippet", ""),
+                "published": None, # Google API 有時不提供精確時間
+                "tier": MEDIA_TIERS.get(domain, 1),
+                "origin": "Google/Bing"
+            })
+        return articles
+    except: return []
 
-# 提示（針對中國/台灣）
-if selected_group in ["中國大陸", "台灣"]:
-    st.caption(cn_note if selected_group == "中國大陸" else tw_note)
+def fetch_newsdata(query, api_key, country=None, language="cn"):
+    """從 NewsData.io 抓取 (負責即時新聞流)"""
+    try:
+        url = f"https://newsdata.io{api_key}&q={query}&language={language}"
+        if country: url += f"&country={country}"
+        
+        resp = requests.get(url, timeout=10).json()
+        articles = []
+        for item in resp.get("results", []):
+            domain = item.get("source_id", "").lower()
+            # 轉換時間
+            dt = date_parser.parse(item.get("pubDate")).astimezone(HKT)
+            articles.append({
+                "title": item.get("title"),
+                "link": item.get("link"),
+                "source": domain,
+                "summary": item.get("description", "")[:200] + "...",
+                "published": dt,
+                "tier": MEDIA_TIERS.get(domain, 1),
+                "origin": "NewsData"
+            })
+        return articles
+    except: return []
 
-query = st.text_input(search_label, placeholder=search_placeholder)
+# --- 3. Streamlit UI 介面 ---
 
-if 'search_results' not in st.session_state:
-    st.session_state.search_results = None
+st.set_page_config(page_title="Global Citizens News Search", layout="wide")
+st.title("🌐 全球公民新聞搜尋平台 (測試版)")
 
-@st.cache_data(ttl=600)
-def fetch_rss_articles(selected_group, query):
-    all_articles = []
-    query_lower = query.lower()
+# 分類與提示
+category = st.radio(
+    "選擇媒體區域", 
+    ["香港媒體", "台灣/中國/世界華文媒體", "世界英文媒體"],
+    horizontal=True
+)
 
-    for source in rss_sources[selected_group]:
-        try:
-            feed = feedparser.parse(source["rss"])
-            for entry in feed.entries:
-                title = entry.get("title", "無標題")
-                link = entry.get("link", "#")
-                published = entry.get("published", entry.get("updated", entry.get("dc:date", entry.get("pubDate", None))))
-                summary_raw = entry.get("summary", entry.get("description", ""))[:500]
+search_query = st.text_input("輸入關鍵字 (搜尋範圍：過去 30 天)", placeholder="例如：AI 發展, 香港經濟...")
 
-                soup = BeautifulSoup(summary_raw, 'html.parser')
-                summary = soup.get_text(separator=' ', strip=True)[:300]
-
-                # 自動精準匹配（對所有搜尋都強制完整字串）
-                if query_lower in title.lower() or query_lower in summary.lower():
-                    dt = None
-                    if published:
-                        try:
-                            dt = date_parser.parse(published)
-                            if dt.tzinfo is None:
-                                dt = dt.replace(tzinfo=pytz.UTC)
-                            dt = dt.astimezone(HKT)
-                        except:
-                            dt = None
-
-                    all_articles.append({
-                        "title": title,
-                        "summary": summary,
-                        "source": source["name"],
-                        "published": dt,
-                        "link": link,
-                        "category": selected_group
-                    })
-        except:
-            pass
-    return all_articles
-
-if st.button(search_button):
-    if not query.strip():
-        st.error("請輸入關鍵字" if interface_lang == "中文" else "Please enter keywords")
+if st.button("開始精準搜尋"):
+    if not search_query:
+        st.warning("請輸入關鍵字")
     else:
-        st.info(loading_text)
-        try:
-            articles = fetch_rss_articles(selected_group, query)
+        with st.spinner("正在同步請求多方引擎，請稍候..."):
+            # 根據分類選擇參數
+            google_key = st.secrets["GOOGLE_API_KEY"]
+            newsdata_key = st.secrets["NEWSDATA_API_KEY"]
+            
+            if category == "香港媒體":
+                cx = st.secrets["CX_HK"]
+                c_code, lang, lr = "hk", "cn", None
+            elif category == "台灣/中國/世界華文媒體":
+                cx = st.secrets["CX_WORLD"]
+                c_code, lang, lr = None, "cn", "lang_zh-TW|lang_zh-CN"
+            else: # 世界英文媒體
+                cx = st.secrets["CX_WORLD"]
+                c_code, lang, lr = None, "en", "lang_en"
 
-            def parse_date(article):
-                return article["published"] if article["published"] else datetime.datetime.min.replace(tzinfo=HKT)
+            # 7. 同時發出搜尋請求 (並發處理)
+            with ThreadPoolExecutor() as executor:
+                future_google = executor.submit(fetch_google_news, search_query, cx, google_key, lr)
+                future_newsdata = executor.submit(fetch_newsdata, search_query, newsdata_key, c_code, lang)
+                
+                google_results = future_google.result()
+                newsdata_results = future_newsdata.result()
 
-            sorted_articles = sorted(articles, key=parse_date, reverse=True)
+            # 5. 整合與排序：白名單 Tier 優先，NewsData 補足
+            all_results = google_results + newsdata_results
+            
+            # 去重 (根據網址)
+            seen_links = set()
+            unique_results = []
+            for r in all_results:
+                if r['link'] not in seen_links:
+                    unique_results.append(r)
+                    seen_links.add(r['link'])
 
-            st.session_state.search_results = sorted_articles
+            # 最終排序：Tier 分數 (高到低) -> 時間 (新到舊)
+            # 註：Google 沒時間的會排在同 Tier 的後面
+            sorted_results = sorted(
+                unique_results, 
+                key=lambda x: (x['tier'], x['published'].timestamp() if x['published'] else 0), 
+                reverse=True
+            )[:20] # 限制顯示 20 則
 
-        except Exception as e:
-            st.error(f"{error_generic}: {str(e)}")
-        else:
-            st.success(success_text)
+            # 顯示結果
+            if not sorted_results:
+                st.info("查無過去 30 天內的相關新聞。")
+            else:
+                for idx, news in enumerate(sorted_results):
+                    st.markdown(f"### {idx+1}. {news['title']}")
+                    # 6. 顯示時間、來源與部分內容
+                    pub_str = news['published'].strftime('%Y-%m-%d %H:%M') if news['published'] else "近期 (Google 深層結果)"
+                    st.caption(f"📅 發布時間: {pub_str} | 🏛️ 來源: {news['source']} | 🏷️ 權重分: {news['tier']}")
+                    st.write(news['summary'])
+                    st.markdown(f"[閱讀全文]({news['link']})")
+                    st.divider()
+                
+                st.info("💡 搜尋結果為過去 30 天。部分深層結果由 Google/Bing 提供，可能不含精確發布時間。")
 
-# 顯示結果
-if st.session_state.search_results is not None:
-    st.subheader("搜尋結果" if interface_lang == "中文" else "Search Results")
-    articles = st.session_state.search_results
-
-    if not articles:
-        st.warning(no_results)
-    else:
-        for article in articles:
-            title = article.get('title', '無標題' if interface_lang == "中文" else 'No title')
-            summary = article.get('summary', '')
-            source = article.get('source', '未知' if interface_lang == "中文" else 'Unknown')
-            category = article.get('category', '')
-            published = article.get('published')
-            pub_display = published.strftime("%Y-%m-%d %H:%M %Z") if published else '未知'
-            link = article.get('link', '#')
-
-            st.markdown(f"**{title}** ({category} - {source})")
-            if summary:
-                st.write(summary + "..." if len(summary) > 250 else summary)
-            st.caption(pub_display)
-            st.markdown(f"[閱讀全文 / Read full article]({link})")
-            st.divider()
+# 頁尾保持不變
+st.markdown("---")
+st.caption("© 2026 全球公民新聞平台 - 測試版 | API 配額有限，請節約使用")

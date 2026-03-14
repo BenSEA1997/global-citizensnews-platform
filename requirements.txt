@@ -1,6 +1,6 @@
 streamlit
 requests
-python-dateutil
-beautifulsoup4
-pytz
 feedparser
+beautifulsoup4
+python-dateutil
+pytz
