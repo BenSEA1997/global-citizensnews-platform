@@ -2,52 +2,49 @@ import streamlit as st
 import requests
 
 def test_api():
-    st.set_page_config(page_title="Final 404 Fix")
-    st.title("🛡️ 搜尋引擎：絕對路徑「硬核」修正版")
+    st.set_page_config(page_title="Terminal 404 Debug")
+    st.title("🕵️ 搜尋引擎：路徑診斷最終版")
     
     # 1. 讀取並強力清理 Secrets
     try:
-        # 移除所有可能的隱形換行、空格或非法字元
-        api_key = "".join(st.secrets["GOOGLE_API_KEY"].split()).strip()
-        cx = "".join(st.secrets["CX_HK"].split()).strip()
-        st.info(f"正在連線引擎 ID: `{cx}`")
+        # 強制移除所有空格、換行、引號
+        api_key = "".join(st.secrets["GOOGLE_API_KEY"].split()).replace('"', '').replace("'", "").strip()
+        cx = "".join(st.secrets["CX_HK"].split()).replace('"', '').replace("'", "").strip()
+        st.info(f"正在診斷引擎 ID: `{cx}`")
     except Exception as e:
         st.error(f"❌ 讀取 Secrets 失敗: {e}")
         st.stop()
 
-    # 2. **絕對正確的 Google API 完整路徑 (不可有任何偏差)**
-    # 注意：必須包含 /customsearch/v1
-    target_url = "https://googleapis.com"
+    # 2. **完全硬編碼的完整路徑**
+    api_url = "https://googleapis.com"
     
     # 3. 發出請求
     params = {
         "key": api_key,
         "cx": cx,
         "q": "香港",
-        "num": 3
+        "num": 1
     }
     
+    # 顯示發出的網址 (隱藏關鍵資訊) 以供肉眼檢查
+    st.write(f"📡 正在請求: `https://googleapis.com?cx={cx}&q=...`")
+    
     try:
-        # 直接對準完整路徑發出請求
-        resp = requests.get(target_url, params=params, timeout=15)
+        resp = requests.get(api_url, params=params, timeout=15)
         
         if resp.status_code == 200:
-            st.success("✅ 恭喜！連線完全成功。404 障礙已徹底排除！")
-            data = resp.json()
-            if "items" in data:
-                st.write(f"🔍 成功抓取新聞：**{data['items'][0]['title']}**")
-                st.json(data['items'][:1])
+            st.success("✅ 恭喜！404 障礙已排除，連線完全成功！")
+            st.json(resp.json().get("items", [])[:1])
         else:
-            st.error(f"❌ Google 拒絕連線 (HTTP {resp.status_code})")
-            # 如果是 404，顯示詳細診斷
+            st.error(f"❌ Google 依然拒絕 (HTTP {resp.status_code})")
             if resp.status_code == 404:
-                st.warning("💡 診斷：404 代表網址路徑不對。請確認您在 Google Cloud 啟用的服務名稱是否為『Custom Search API』。")
-                st.text_area("回應內容 (若看到機器人則路徑仍錯):", resp.text[:500])
+                st.warning("💡 診斷：404 代表網址不對。請檢查 Google Cloud 是否啟用了錯誤的 API 類型。")
+                st.text_area("回應原始碼 (若見機器人則路徑仍錯):", resp.text[:500])
             else:
                 st.json(resp.json())
                 
     except Exception as e:
-        st.error(f"⚠️ 連線過程發生異常: {e}")
+        st.error(f"⚠️ 系統異常: {e}")
 
 if __name__ == "__main__":
     test_api()
