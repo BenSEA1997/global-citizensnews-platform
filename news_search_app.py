@@ -5,39 +5,51 @@ import pytz
 from concurrent.futures import ThreadPoolExecutor
 from dateutil import parser as date_parser
 
-# --- 1. 設定與權重定義 (整合您的 PDF 白名單) ---
+# --- 1. 設定與權重定義 (整合您的 90 個白名單) ---
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# 媒體權重字典：用於排序 (Tier 10 為最優先)
-# 邏輯：只要 Google 回傳的網址包含以下關鍵字，即給予高分
+# 媒體權重字典：只要網址包含這些關鍵字，即給予 Tier 10 高分
 MEDIA_TIERS = {
     "rthk.hk": 10, "now.com": 10, "metroradio.com.hk": 10, "i-cable.com": 10,
     "881903.com": 10, "tvb.com": 10, "yahoo.com": 10, "epochtimes.com": 10,
     "inmediahk.net": 10, "orangenews.hk": 10, "scmp.com": 10, "on.cc": 10,
     "mingpao.com": 10, "stheadline.com": 10, "hkej.com": 10, "hket.com": 10,
     "bbc.com": 10, "nytimes.com": 10, "reuters.com": 10, "apnews.com": 10,
-    "cna.com.tw": 10, "udn.com": 10, "people.com.cn": 10, "xinhuanet.com": 10
+    "cna.com.tw": 10, "udn.com": 10, "people.com.cn": 10, "xinhuanet.com": 10,
+    "dw.com": 10, "rfi.fr": 10, "bloomberg.com": 10, "aljazeera.com": 10
 }
 
 # --- 2. 核心搜尋邏輯 ---
 
 def fetch_google_news(query, cx, api_key, lr=None):
-    """Google PSE 搜尋：負責深層搜尋您的白名單內容"""
+    """Google PSE 搜尋：負責深層搜尋白名單內容"""
     try:
         url = "https://googleapis.com"
+        # 移除 dateRestrict 進行除錯，確保能搜到內容
         params = {
-            "key": api_key, "cx": cx, "q": query,
-            "dateRestrict": "m1", "num": 10, "hl": "zh-Hant"
+            "key": api_key, 
+            "cx": cx, 
+            "q": query,
+            "num": 10,
+            "hl": "zh-Hant"
         }
         if lr: params["lr"] = lr
         
-        resp = requests.get(url, params=params, timeout=10).json()
+        resp = requests.get(url, params=params, timeout=10)
+        data = resp.json()
+        
+        # 錯誤檢查：若 API 報錯則顯示
+        if "error" in data:
+            st.error(f"Google API 報錯: {data['error'].get('message')}")
+            return []
+            
         articles = []
-        for item in resp.get("items", []):
+        for item in data.get("items", []):
             link = item.get("link", "").lower()
-            # 自動匹配權重
             article_tier = 1
             source_display = item.get("displayLink", "")
+            
+            # 靈活匹配權重
             for key, val in MEDIA_TIERS.items():
                 if key in link:
                     article_tier = val
@@ -49,15 +61,17 @@ def fetch_google_news(query, cx, api_key, lr=None):
                 "link": item.get("link"),
                 "source": source_display,
                 "summary": item.get("snippet", ""),
-                "published": None, # Google API 有時不提供精確發布時間
+                "published": None,
                 "tier": article_tier,
                 "origin": "Google/Bing"
             })
         return articles
-    except: return []
+    except Exception as e:
+        st.error(f"Google 引擎連線異常: {e}")
+        return []
 
 def fetch_newsdata(query, api_key, country=None, language="cn"):
-    """NewsData API：負責抓取白名單內的即時新聞"""
+    """NewsData API：負責抓取即時新聞"""
     try:
         url = f"https://newsdata.io{api_key}&q={query}&language={language}"
         if country: url += f"&country={country}"
@@ -83,26 +97,32 @@ def fetch_newsdata(query, api_key, country=None, language="cn"):
         return articles
     except: return []
 
-# --- 3. UI 介面 (保留您的分類設計) ---
+# --- 3. Streamlit UI 介面 ---
 
 st.set_page_config(page_title="Global Citizens News Search", layout="wide")
 st.title("🌐 全球公民新聞搜尋平台")
 
+# 保留您的分類設計
 category = st.radio(
     "選擇媒體區域", 
     ["1. 香港媒體", "2. 中文地區媒體", "3. 世界英文媒體"],
     horizontal=True
 )
 
-search_query = st.text_input("輸入關鍵字 (過去 30 天)", placeholder="例如：香港經濟, AI 發展...")
+search_query = st.text_input("輸入關鍵字", placeholder="例如：香港經濟, AI 發展...")
 
-if st.button("開始搜尋"):
+if st.button("開始精準搜尋"):
     if not search_query:
         st.warning("請輸入關鍵字")
     else:
         with st.spinner("正在同步請求多方引擎與白名單..."):
-            g_key = st.secrets["GOOGLE_API_KEY"]
-            n_key = st.secrets["NEWSDATA_API_KEY"]
+            # 從 Secrets 讀取金鑰
+            try:
+                g_key = st.secrets["GOOGLE_API_KEY"]
+                n_key = st.secrets["NEWSDATA_API_KEY"]
+            except KeyError:
+                st.error("錯誤：找不到 API 金鑰。請確認 Streamlit Cloud 的 Secrets 設定。")
+                st.stop()
             
             # 分類切換邏輯
             if category == "1. 香港媒體":
@@ -129,6 +149,7 @@ if st.button("開始搜尋"):
                 if r['link'] not in seen:
                     unique.append(r); seen.add(r['link'])
 
+            # 最終排序：Tier 分數 (高到低) -> 時間 (新到舊)
             sorted_news = sorted(
                 unique, 
                 key=lambda x: (x['tier'], x['published'].timestamp() if x['published'] else 0), 
@@ -136,7 +157,7 @@ if st.button("開始搜尋"):
             )[:20]
 
             if not sorted_news:
-                st.info("查無相關新聞。")
+                st.info("查無相關新聞。請確認關鍵字是否正確，或嘗試更換搜尋地區。")
             else:
                 for news in sorted_news:
                     st.markdown(f"### {news['title']}")
@@ -145,5 +166,10 @@ if st.button("開始搜尋"):
                     st.write(news['summary'])
                     st.markdown(f"[閱讀全文]({news['link']})")
                     st.divider()
-                st.info("💡 搜尋結果基於您的白名單名冊。")
+                st.info("💡 搜尋結果基於您的白名單名冊。部分深層結果可能不含精確發布時間。")
+
+# 頁尾
+st.markdown("---")
+st.caption("© 2026 全球公民新聞平台 - 測試版")
+
 
