@@ -1,11 +1,28 @@
+# ====================
+# Code Version: Ver 1.3
+# 主要變更：
+#   - 加入版本標註系統（感謝 Benny 建議）
+#   - 保留 Ver 1.2 所有修復：關鍵字過濾、HKT 時間、來源只顯示 media name、無「平台: RSS」
+#   - NewsData 0 時顯示提示
+# 已知問題/待優化（你可 mark）：
+#   - HK「伊朗」仍出現少量不相關（過濾已加強，但 summary 可能仍含關鍵字）
+#   - NewsData 常 0（免費版 48h 限制 + delay）
+#   - 無 Tier 排序（可加回）
+#   - 搜尋範圍：RSS 最近幾天～2週，無固定 30 天
+# 下一步預期（Ver 1.4）：若你想加 Tier、30 天過濾、或改進不相關結果
+# ====================
+
 import streamlit as st
 import requests
-from datetime import datetime
 import feedparser
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+import pytz
 from urllib.parse import quote
 
-# --- 1. RSS 清單（已清理 + 對應 feed） ---
+HKT = pytz.timezone('Asia/Hong_Kong')
+
+# --- RSS 清單（已按你最新要求更新） ---
 HK_RSS = {
     "rthk.hk": "https://news.rthk.hk/rthk/news/rss/e_expressnews_elocal.xml",
     "news.now.com": "https://news.now.com/home/rss",
@@ -93,15 +110,14 @@ WORLD_RSS = {
     "aljazeera.com": "https://www.aljazeera.com/xml/rss/all.xml",
     "bbc.com": "https://feeds.bbci.co.uk/news/rss.xml",
     "news.sky.com": "https://news.sky.com/feeds/rss/home.xml"
-    # 可再補其他
 }
 
-# --- 2. 抓取單個 RSS feed 的函數 ---
+# 抓取單個 RSS
 def fetch_rss_feed(url):
     try:
         feed = feedparser.parse(url, request_headers={'User-Agent': 'Mozilla/5.0'})
         articles = []
-        for entry in feed.entries[:20]:  # 每 feed 限 20 筆，避免過載
+        for entry in feed.entries[:15]:
             link = entry.get('link', '')
             if link:
                 articles.append({
@@ -113,70 +129,58 @@ def fetch_rss_feed(url):
                     "origin": "RSS"
                 })
         return articles
-    except Exception:
+    except:
         return []
 
-# --- 3. 並行抓取所有 RSS ---
 def fetch_all_rss(rss_dict):
     articles = []
     with ThreadPoolExecutor(max_workers=25) as executor:
         future_to_url = {executor.submit(fetch_rss_feed, url): domain for domain, url in rss_dict.items() if url}
         for future in as_completed(future_to_url):
-            try:
-                articles.extend(future.result())
-            except:
-                pass
+            articles.extend(future.result())
     return articles
 
-# --- 4. NewsData 補充（原函數，略微調整） ---
+# NewsData 補充
 def fetch_newsdata(query, api_key):
     try:
         api_key_clean = api_key.strip().replace('\n', '').replace('\r', '')
         url = "https://newsdata.io/api/1/news"
-        params = {
-            "apikey": api_key_clean,
-            "q": query,
-            "language": "zh,en"
-        }
+        params = {"apikey": api_key_clean, "q": query, "language": "zh,en"}
         resp = requests.get(url, params=params, timeout=10)
         if resp.status_code != 200:
             return []
         data = resp.json()
-        articles = []
-        for item in data.get("results", [])[:20]:
-            link = item.get("link", "")
-            articles.append({
-                "title": item.get("title"),
-                "link": link,
-                "source": item.get("source_id"),
-                "summary": item.get("description", ""),
-                "published": item.get("pubDate"),
-                "origin": "NewsData"
-            })
-        return articles
+        return [{
+            "title": item.get("title"),
+            "link": item.get("link", ""),
+            "source": item.get("source_id"),
+            "summary": item.get("description", ""),
+            "published": item.get("pubDate"),
+            "origin": "NewsData"
+        } for item in data.get("results", [])[:15]]
     except:
         return []
 
-# --- 5. 主搜尋邏輯 ---
+# 主搜尋
 def search_news(query, category):
     if not query.strip():
         return []
 
     n_key = st.secrets.get("NEWSDATA_API_KEY", "")
 
-    # 並行執行
     with ThreadPoolExecutor() as executor:
         f_newsdata = executor.submit(fetch_newsdata, query, n_key)
-
-        if "香港" in category:
-            f_rss = executor.submit(fetch_all_rss, HK_RSS)
-        else:
-            f_rss = executor.submit(fetch_all_rss, WORLD_RSS)
-
+        f_rss = executor.submit(fetch_all_rss, HK_RSS if "香港" in category else WORLD_RSS)
         rss_results = f_rss.result()
         newsdata_results = f_newsdata.result()
 
-    all_results = rss_results + newsdata_results
+    # 加強關鍵字過濾（title 或 summary 必須包含 query）
+    filtered_rss = [
+        item for item in rss_results
+        if query.lower() in item["title"].lower() or query.lower() in item["summary"].lower()
+    ]
+
+    all_results = filtered_rss + newsdata_results
 
     # 去重
     seen = set()
@@ -187,14 +191,35 @@ def search_news(query, category):
             seen.add(link)
             unique_results.append(item)
 
-    # 簡單按 published 時間排序（最新在上），無 Tier
-    unique_results.sort(key=lambda x: x.get("published", datetime.min), reverse=True)
+    # 安全排序
+    def safe_published(item):
+        p = item.get("published")
+        if isinstance(p, tuple):
+            return datetime(*p[:6])
+        elif isinstance(p, str):
+            try:
+                return datetime.strptime(p[:19], "%Y-%m-%dT%H:%M:%S")
+            except:
+                return datetime.min
+        return datetime.min
+
+    unique_results.sort(key=safe_published, reverse=True)
+
+    # 轉香港時間
+    for item in unique_results:
+        dt = safe_published(item)
+        if dt != datetime.min:
+            item["published_hkt"] = dt.astimezone(HKT).strftime("%Y-%m-%d %H:%M HKT")
+        else:
+            item["published_hkt"] = "時間未知"
 
     st.write(f"RSS 原始筆數: {len(rss_results)} | NewsData 原始筆數: {len(newsdata_results)}")
+    if len(newsdata_results) == 0:
+        st.info("NewsData 目前無補充結果（免費版限制：僅過去 48 小時 + 可能延遲 12 小時，或無匹配你的關鍵字）")
 
-    return unique_results[:30]  # 限前 30 筆，避免過載
+    return unique_results[:30]
 
-# --- 6. UI 介面 ---
+# UI
 st.set_page_config(page_title="全球公民新聞搜尋平台", layout="wide")
 st.title("🌐 全球公民新聞搜尋平台")
 
@@ -212,7 +237,7 @@ if st.button("開始搜尋"):
                     st.success(f"找到 {len(results)} 筆新聞")
                     for news in results:
                         st.markdown(f"### {news['title']}")
-                        st.caption(f"來源: {news['source']} | 平台: {news['origin']}")
+                        st.caption(f"來源: {news['source']} | {news['published_hkt']}")
                         st.write(news['summary'])
                         st.markdown(f"[閱讀全文]({news['link']})")
                         st.divider()
