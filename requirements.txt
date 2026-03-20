@@ -1,4 +1,5 @@
-streamlit>=1.38.0
-requests
+streamlit
 feedparser
+requests
+trafilatura
 pytz
