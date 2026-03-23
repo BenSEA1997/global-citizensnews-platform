@@ -63,16 +63,19 @@ def fetch_google_news(url):
 
 def build_url(query, gl, hl, ceid, start_date=None, end_date=None):
     q = query.replace(" ", "+")
+    
     date_parts = []
     if start_date:
         date_parts.append(f"after:{start_date.strftime('%Y-%m-%d')}")
     if end_date:
         date_parts.append(f"before:{end_date.strftime('%Y-%m-%d')}")
-    date_str = " ".join(date_parts) if date_parts else ""
-    if date_str:
-        date_str = f" {date_str}"  # 加在 q 後面，避免開頭空格
     
-    return f"https://news.google.com/rss/search?q={q}{date_str}&hl={hl}&gl={gl}&ceid={ceid}"
+    # 關鍵：用 + 連接所有部分，無空格
+    full_q = q
+    if date_parts:
+        full_q += "+" + "+".join(date_parts)  # 用 + 連接 after/before
+    
+    return f"https://news.google.com/rss/search?q={full_q}&hl={hl}&gl={gl}&ceid={ceid}"
 
 # ==================== UI ====================
 st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.1", layout="wide")
