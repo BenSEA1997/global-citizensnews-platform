@@ -63,11 +63,14 @@ def fetch_google_news(url):
 
 def build_url(query, gl, hl, ceid, start_date=None, end_date=None):
     q = query.replace(" ", "+")
-    date_str = ""
+    date_parts = []
     if start_date:
-        date_str += f" after:{start_date.strftime('%Y-%m-%d')}"
+        date_parts.append(f"after:{start_date.strftime('%Y-%m-%d')}")
     if end_date:
-        date_str += f" before:{end_date.strftime('%Y-%m-%d')}"
+        date_parts.append(f"before:{end_date.strftime('%Y-%m-%d')}")
+    date_str = " ".join(date_parts) if date_parts else ""
+    if date_str:
+        date_str = f" {date_str}"  # 加在 q 後面，避免開頭空格
     
     return f"https://news.google.com/rss/search?q={q}{date_str}&hl={hl}&gl={gl}&ceid={ceid}"
 
