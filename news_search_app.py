@@ -1,7 +1,7 @@
 # ====================
-# Code Version: Ver 4.0 - Google News RSS + 白名單優先 + 全網補漏
-# 香港模式：先 30+ HK 白名單 → 再 gl=HK 全網補漏
-# 大中華模式：先 40+ World 白名單 → 再 gl=TW 全網補漏
+# Code Version: Ver 4.1 - Google News RSS + 後處理白名單 + 全網補漏
+# 香港模式：先 filter HK 白名單（置前） → 再 gl=HK 全網補漏
+# 大中華模式：先 filter World 白名單（置前） → 再 gl=TW 全網補漏
 # 去重 + 日期預設 7 天 + HKT 顯示
 # ====================
 
@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# ==================== 你之前定好的白名單 (直接用 keys) ====================
+# ==================== 白名單（你之前定好嘅） ====================
 HK_WHITE_LIST = [
     "rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com",
     "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com",
@@ -53,19 +53,16 @@ def fetch_google_news(url):
                     "title": entry.get('title', '無標題'),
                     "link": link,
                     "source": get_domain(link),
-                    "summary": entry.get('summary', ''),
+                    "summary": entry.get('summary', entry.get('description', '')),
                     "published": pub
                 })
         return articles
-    except:
+    except Exception as e:
+        st.error(f"Google News 拉取失敗: {e}")
         return []
 
-def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None):
+def build_url(query, gl, hl, ceid, start_date=None, end_date=None):
     q = query.replace(" ", "+")
-    if sites:
-        site_str = " OR ".join(f"site:{s}" for s in sites)
-        q = f"({q}) ({site_str})"
-    
     date_str = ""
     if start_date:
         date_str += f" after:{start_date.strftime('%Y-%m-%d')}"
@@ -75,8 +72,8 @@ def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None):
     return f"https://news.google.com/rss/search?q={q}{date_str}&hl={hl}&gl={gl}&ceid={ceid}"
 
 # ==================== UI ====================
-st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.0", layout="wide")
-st.title("🌐 全球公民新聞搜尋平台（Ver 4.0）")
+st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.1", layout="wide")
+st.title("🌐 全球公民新聞搜尋平台（Ver 4.1）")
 
 region = st.radio("選擇搜尋區域", ["1. 香港媒體（優先白名單）", "2. 中國/台灣/世界華文媒體"], horizontal=True)
 query = st.text_input("輸入關鍵字（例如：伊朗、樓市、國安法）")
@@ -93,27 +90,30 @@ if st.button("開始搜尋", type="primary"):
         st.stop()
 
     is_hk = "香港" in region
-    white_list = HK_WHITE_LIST if is_hk else WORLD_WHITE_LIST
+    white_list = set(HK_WHITE_LIST if is_hk else WORLD_WHITE_LIST)  # 用 set 加速查詢
     gl = "HK" if is_hk else "TW"
     hl = "zh-HK" if is_hk else "zh-TW"
     ceid = "HK:zh-Hant" if is_hk else "TW:zh-Hant"
 
     with st.spinner("正在搜尋...（白名單優先）"):
-        # 1. 先跑白名單（精準）
-        white_url = build_url(query, gl, hl, ceid, start_date, end_date, white_list)
-        white_results = fetch_google_news(white_url)
+        # 1. 先拉全網（穩定、無 URL 長度問題）
+        full_url = build_url(query, gl, hl, ceid, start_date, end_date)
+        all_raw_results = fetch_google_news(full_url)
         
-        # 2. 再跑全網補漏
-        full_url = build_url(query, gl, hl, ceid, start_date, end_date)  # 無 site:
-        full_results = fetch_google_news(full_url)
+        if not all_raw_results:
+            st.warning("Google News 暫無結果，請稍後再試或改關鍵字")
+            st.stop()
         
-        # 去重
-        seen = {item["link"] for item in white_results}
-        supplement = [item for item in full_results if item["link"] not in seen]
+        # 2. 過濾白名單（置前）
+        white_results = [item for item in all_raw_results if item["source"] in white_list]
         
+        # 3. 補漏（全網中不在白名單的）
+        supplement = [item for item in all_raw_results if item["source"] not in white_list]
+        
+        # 合併：白名單先 + 補漏後
         all_results = white_results + supplement
         
-        # 轉 HKT + 排序
+        # 轉 HKT + 排序（時間倒序）
         for item in all_results:
             if item["published"]:
                 dt = datetime(*item["published"][:6])
@@ -121,7 +121,7 @@ if st.button("開始搜尋", type="primary"):
             else:
                 item["published_hkt"] = "未知時間"
         
-        all_results.sort(key=lambda x: x.get("published", (0,)), reverse=True)
+        all_results.sort(key=lambda x: x.get("published", (0,0,0,0,0,0)), reverse=True)
 
         st.success(f"找到 {len(all_results)} 筆新聞（白名單優先）")
         
@@ -131,4 +131,3 @@ if st.button("開始搜尋", type="primary"):
             st.write(news['summary'][:300] + "..." if len(news['summary']) > 300 else news['summary'])
             st.markdown(f"[閱讀全文]({news['link']})")
             st.divider()
-
