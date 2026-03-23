@@ -1,220 +1,134 @@
 # ====================
-# Code Version: Ver 1.9 - 全網搜尋升級
-# 主要變更：
-#   - 加 trafilatura 全文提取，只對粗濾後候選文章抓正文
-#   - 粗濾後只處理前 MAX_FULLTEXT_CANDIDATES = 50 篇文章（防 timeout）
-#   - 每篇文章抓取加 timeout=8 秒
-#   - 正文 match 關鍵字才保留
-#   - 保留 Ver 1.8 所有功能（HK/WORLD RSS、NewsData、去重、排序）
-# 已知問題：
-#   - 全文抓取會令總時間增加（通常 10-35 秒，視網絡）
-#   - 部分網站防爬或 paywall 可能提取失敗（會跳過）
+# Code Version: Ver 4.0 - Google News RSS + 白名單優先 + 全網補漏
+# 香港模式：先 30+ HK 白名單 → 再 gl=HK 全網補漏
+# 大中華模式：先 40+ World 白名單 → 再 gl=TW 全網補漏
+# 去重 + 日期預設 7 天 + HKT 顯示
 # ====================
 
 import streamlit as st
-import requests
 import feedparser
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import pytz
 from urllib.parse import urlparse
-import trafilatura  # 新增：全文提取
 
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# HK_RSS 和 WORLD_RSS 清單（同 Ver 1.8，無變）
-HK_RSS = {
-    "rthk.hk": "https://news.rthk.hk/rthk/news/rss/e_expressnews_elocal.xml",
-    "news.now.com": "https://news.now.com/home/rss",
-    # ... (你原本所有 HK_RSS 內容，保持不變)
-    # 為節省空間，這裡省略，實際 copy 時用你 Ver 1.8 的完整 dict
-}
+# ==================== 你之前定好的白名單 (直接用 keys) ====================
+HK_WHITE_LIST = [
+    "rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com",
+    "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com",
+    "hongkongfp.com", "skypost.hk", "thechasernews.co.uk", "pulsehknews.com", "thecollectivehk.com",
+    "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk",
+    "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com",
+    "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "stepaper.stheadline.com",
+    "eastweek.stheadline.com", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"
+]
 
-WORLD_RSS = {
-    "straitstimes.com": "https://www.straitstimes.com/rss",
-    "bbc.com": "https://feeds.bbci.co.uk/news/rss.xml",
-    # ... 同樣用你原本完整 WORLD_RSS
-}
-
-# 新增：控制全文抓取數量（調高會更準但更慢）
-MAX_FULLTEXT_CANDIDATES = 50
-FULLTEXT_TIMEOUT = 8  # 秒
+WORLD_WHITE_LIST = [
+    "straitstimes.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "economist.com",
+    "telegraph.co.uk", "usatoday.com", "ft.com", "theguardian.com", "washingtonpost.com",
+    "bloomberg.com", "afp.com", "apnews.com", "reuters.com", "ftchinese.com", "rfi.fr",
+    "dw.com", "zh.cn.nikkei.com", "m.cn.nytimes.com", "ttv.com.tw", "ctv.com.tw",
+    "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw",
+    "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com", "caijing.com.cn",
+    "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn",
+    "chinadaily.com.cn", "qstheory.cn", "xinhuanet.com", "people.com.cn", "aljazeera.com", "bbc.com"
+]
 
 def get_domain(link):
     try:
-        parsed = urlparse(link)
-        domain = parsed.netloc.replace("www.", "")
-        return domain if domain else "未知來源"
+        return urlparse(link).netloc.replace("www.", "")
     except:
         return "未知來源"
 
-def fetch_rss_feed(url):
+def fetch_google_news(url):
     try:
         feed = feedparser.parse(url, request_headers={'User-Agent': 'Mozilla/5.0'})
         articles = []
-        feed_updated = feed.feed.get('updated_parsed')
-        for entry in feed.entries[:15]:
+        for entry in feed.entries:
             link = entry.get('link', '')
             if link:
-                pub = entry.get('published_parsed') or entry.get('updated_parsed') or feed_updated or None
+                pub = entry.get('published_parsed')
                 articles.append({
                     "title": entry.get('title', '無標題'),
                     "link": link,
                     "source": get_domain(link),
-                    "summary": entry.get('summary', entry.get('description', '')),
-                    "published": pub,
-                    "origin": "RSS",
-                    "fulltext": ""  # 新欄位，等下填
+                    "summary": entry.get('summary', ''),
+                    "published": pub
                 })
         return articles
     except:
         return []
 
-def fetch_all_rss(rss_dict):
-    articles = []
-    with ThreadPoolExecutor(max_workers=25) as executor:
-        future_to_url = {executor.submit(fetch_rss_feed, url): domain for domain, url in rss_dict.items() if url}
-        for future in as_completed(future_to_url):
-            articles.extend(future.result())
-    return articles
+def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None):
+    q = query.replace(" ", "+")
+    if sites:
+        site_str = " OR ".join(f"site:{s}" for s in sites)
+        q = f"({q}) ({site_str})"
+    
+    date_str = ""
+    if start_date:
+        date_str += f" after:{start_date.strftime('%Y-%m-%d')}"
+    if end_date:
+        date_str += f" before:{end_date.strftime('%Y-%m-%d')}"
+    
+    return f"https://news.google.com/rss/search?q={q}{date_str}&hl={hl}&gl={gl}&ceid={ceid}"
 
-def fetch_newsdata(query, api_key):
-    try:
-        api_key_clean = api_key.strip().replace('\n', '').replace('\r', '')
-        url = "https://newsdata.io/api/1/news"
-        params = {"apikey": api_key_clean, "q": query, "language": "zh,en"}
-        resp = requests.get(url, params=params, timeout=10)
-        if resp.status_code != 200:
-            return []
-        data = resp.json()
-        return [{
-            "title": item.get("title"),
-            "link": item.get("link", ""),
-            "source": item.get("source_id"),
-            "summary": item.get("description", ""),
-            "published": item.get("pubDate"),
-            "origin": "NewsData",
-            "fulltext": item.get("content", "")  # NewsData 有時有 content
-        } for item in data.get("results", [])[:15]]
-    except:
-        return []
+# ==================== UI ====================
+st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.0", layout="wide")
+st.title("🌐 全球公民新聞搜尋平台（Ver 4.0）")
 
-def extract_fulltext(url):
-    """用 trafilatura 抓正文，帶 timeout"""
-    try:
-        downloaded = trafilatura.fetch_url(url, timeout=FULLTEXT_TIMEOUT)
-        if downloaded:
-            text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
-            return text or ""
-        return ""
-    except Exception:
-        return ""
+region = st.radio("選擇搜尋區域", ["1. 香港媒體（優先白名單）", "2. 中國/台灣/世界華文媒體"], horizontal=True)
+query = st.text_input("輸入關鍵字（例如：伊朗、樓市、國安法）")
 
-def search_news(query, category):
-    if not query.strip():
-        return []
+col1, col2 = st.columns(2)
+with col1:
+    start_date = st.date_input("開始日期", value=date.today() - timedelta(days=7))
+with col2:
+    end_date = st.date_input("結束日期", value=date.today())
 
-    n_key = st.secrets.get("NEWSDATA_API_KEY", "")
+if st.button("開始搜尋", type="primary"):
+    if not query:
+        st.warning("請輸入關鍵字")
+        st.stop()
 
-    with ThreadPoolExecutor() as executor:
-        f_newsdata = executor.submit(fetch_newsdata, query, n_key)
-        f_rss = executor.submit(fetch_all_rss, HK_RSS if "香港" in category else WORLD_RSS)
-        rss_results = f_rss.result()
-        newsdata_results = f_newsdata.result()
+    is_hk = "香港" in region
+    white_list = HK_WHITE_LIST if is_hk else WORLD_WHITE_LIST
+    gl = "HK" if is_hk else "TW"
+    hl = "zh-HK" if is_hk else "zh-TW"
+    ceid = "HK:zh-Hant" if is_hk else "TW:zh-Hant"
 
-    # Step 1: 粗濾（title + summary）
-    q_lower = query.lower()
-    alt_q = "iran" if "伊朗" in q_lower else q_lower
-    candidates = []
-    for item in rss_results + newsdata_results:
-        text_check = (item["title"] + " " + item["summary"]).lower()
-        if q_lower in text_check or alt_q in text_check:
-            candidates.append(item)
+    with st.spinner("正在搜尋...（白名單優先）"):
+        # 1. 先跑白名單（精準）
+        white_url = build_url(query, gl, hl, ceid, start_date, end_date, white_list)
+        white_results = fetch_google_news(white_url)
+        
+        # 2. 再跑全網補漏
+        full_url = build_url(query, gl, hl, ceid, start_date, end_date)  # 無 site:
+        full_results = fetch_google_news(full_url)
+        
+        # 去重
+        seen = {item["link"] for item in white_results}
+        supplement = [item for item in full_results if item["link"] not in seen]
+        
+        all_results = white_results + supplement
+        
+        # 轉 HKT + 排序
+        for item in all_results:
+            if item["published"]:
+                dt = datetime(*item["published"][:6])
+                item["published_hkt"] = dt.astimezone(HKT).strftime("%Y-%m-%d %H:%M HKT")
+            else:
+                item["published_hkt"] = "未知時間"
+        
+        all_results.sort(key=lambda x: x.get("published", (0,)), reverse=True)
 
-    st.info(f"粗濾得到 {len(candidates)} 個候選文章，開始抓取全文（最多 {MAX_FULLTEXT_CANDIDATES} 個）...")
-
-    # Step 2: 只對前 N 個候選抓全文
-    fulltext_candidates = candidates[:MAX_FULLTEXT_CANDIDATES]
-    with ThreadPoolExecutor(max_workers=10) as executor:  # 控制並行數，避免被 ban
-        future_to_item = {executor.submit(extract_fulltext, item["link"]): item for item in fulltext_candidates}
-        for future in as_completed(future_to_item):
-            item = future_to_item[future]
-            try:
-                item["fulltext"] = future.result()
-            except TimeoutError:
-                item["fulltext"] = ""
-            except Exception:
-                item["fulltext"] = ""
-
-    # Step 3: 用全文 + 原 summary/title 精準過濾
-    filtered_results = []
-    for item in candidates:
-        search_text = (item["title"] + " " + item["summary"] + " " + item["fulltext"]).lower()
-        if q_lower in search_text or alt_q in search_text:
-            filtered_results.append(item)
-
-    all_results = filtered_results
-
-    # 去重
-    seen = set()
-    unique_results = []
-    for item in all_results:
-        link = item.get("link")
-        if link and link not in seen:
-            seen.add(link)
-            unique_results.append(item)
-
-    # 排序
-    def safe_published(item):
-        p = item.get("published")
-        if isinstance(p, tuple):
-            return datetime(*p[:6])
-        elif isinstance(p, str):
-            try:
-                return datetime.strptime(p[:19], "%Y-%m-%dT%H:%M:%S")
-            except:
-                return datetime.now(pytz.utc) - pytz.timedelta(days=30)
-        return datetime.now(pytz.utc) - pytz.timedelta(days=30)
-
-    unique_results.sort(key=safe_published, reverse=True)
-
-    for item in unique_results:
-        dt = safe_published(item)
-        item["published_hkt"] = dt.astimezone(HKT).strftime("%Y-%m-%d %H:%M HKT")
-
-    st.write(f"粗濾候選: {len(candidates)} | 最終匹配: {len(unique_results)} | NewsData: {len(newsdata_results)}")
-
-    if len(newsdata_results) == 0:
-        st.info("NewsData 無結果（免費版限制）")
-
-    return unique_results[:30]
-
-# UI（同之前）
-st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 1.9 全網搜尋", layout="wide")
-st.title("🌐 全球公民新聞搜尋平台（Ver 1.9 - 全文搜尋）")
-
-category = st.radio("選擇媒體區域", ["1. 香港媒體", "2. 世界中英文媒體"], horizontal=True)
-search_query = st.text_input("輸入關鍵字 (建議試「伊朗」或「Iran」)")
-
-if st.button("開始搜尋"):
-    if search_query:
-        with st.spinner("正在從 RSS + NewsData 獲取新聞 + 全文提取..."):
-            try:
-                results = search_news(search_query, category)
-                if not results:
-                    st.warning("未找到相關新聞，請試其他關鍵字或檢查網絡")
-                else:
-                    st.success(f"找到 {len(results)} 筆新聞（已全文匹配）")
-                    for news in results:
-                        st.markdown(f"### {news['title']}")
-                        st.caption(f"來源: {news['source']} | {news['published_hkt']} | 來源: {news['origin']}")
-                        st.write(news['summary'])
-                        if news['fulltext']:
-                            st.caption("正文片段: " + news['fulltext'][:200] + "...")
-                        st.markdown(f"[閱讀全文]({news['link']})")
-                        st.divider()
-            except Exception as e:
-                st.error(f"執行出錯: {e}")
-    else:
-        st.warning("請先輸入搜尋關鍵字")
+        st.success(f"找到 {len(all_results)} 筆新聞（白名單優先）")
+        
+        for news in all_results:
+            st.markdown(f"### {news['title']}")
+            st.caption(f"來源：{news['source']} | {news['published_hkt']}")
+            st.write(news['summary'][:300] + "..." if len(news['summary']) > 300 else news['summary'])
+            st.markdown(f"[閱讀全文]({news['link']})")
+            st.divider()
 
