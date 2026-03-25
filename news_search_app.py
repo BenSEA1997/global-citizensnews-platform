@@ -1,5 +1,5 @@
 # ====================
-# Code Version: Ver 4.4 - 最終顯示優化 + 英文關鍵字處理 + 精確短語
+# Code Version: Ver 4.5 - 精確匹配 + 語言智能切換 + 減少側欄干擾
 # ====================
 
 import streamlit as st
@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# ==================== 白名單 ====================
+# 白名單
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "pulsehknews.com", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 
 WORLD_WHITE_LIST = {"straitstimes.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "economist.com", "telegraph.co.uk", "usatoday.com", "ft.com", "theguardian.com", "washingtonpost.com", "bloomberg.com", "afp.com", "apnews.com", "reuters.com", "ftchinese.com", "rfi.fr", "dw.com", "zh.cn.nikkei.com", "m.cn.nytimes.com", "ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com", "caijing.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "chinadaily.com.cn", "qstheory.cn", "xinhuanet.com", "people.com.cn", "aljazeera.com", "bbc.com"}
@@ -21,11 +21,10 @@ def get_domain(link):
     except:
         return "未知來源"
 
-def clean_title_and_source(title):
+def clean_title(title):
     if " - " in title:
-        parts = title.rsplit(" - ", 1)
-        return parts[0].strip(), parts[1].strip()
-    return title.strip(), ""
+        return title.rsplit(" - ", 1)[0].strip()
+    return title.strip()
 
 def clean_summary(text):
     if not text:
@@ -71,11 +70,11 @@ def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None):
     return f"https://news.google.com/rss/search?q={q}{date_str}&hl={hl}&gl={gl}&ceid={ceid}"
 
 # ==================== UI ====================
-st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.4", layout="wide")
-st.title("🌐 全球公民新聞搜尋平台（Ver 4.4）")
+st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.5", layout="wide")
+st.title("🌐 全球公民新聞搜尋平台（Ver 4.5）")
 
 region = st.radio("選擇搜尋區域", ["1. 香港媒體（優先白名單）", "2. 中國/台灣/世界華文媒體"], horizontal=True)
-query = st.text_input("輸入關鍵字")
+query = st.text_input("輸入關鍵字（英文可用 \"精確短語\" ）")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -94,8 +93,14 @@ if st.button("開始搜尋", type="primary"):
     hl = "zh-HK" if is_hk else "zh-TW"
     ceid = "HK:zh-Hant" if is_hk else "TW:zh-Hant"
 
+    # 如果是 World Engine 且關鍵字是英文，強制切英文模式
+    if not is_hk and any(c.isascii() and c.isalpha() for c in query):
+        hl = "en"
+        gl = "US"
+        ceid = "US:en"
+
     with st.spinner("正在搜尋..."):
-        # Batch site: 白名單搜尋（分批）
+        # Batch 白名單搜尋
         batch_size = 8
         white_results = []
         for i in range(0, len(white_list), batch_size):
@@ -111,14 +116,12 @@ if st.button("開始搜尋", type="primary"):
         seen_links = {item["link"] for item in white_results}
         supplement = [item for item in supplement if item["link"] not in seen_links]
 
-        # 合併：白名單永遠置前
         all_results = white_results + supplement
 
         # 處理顯示
         for item in all_results:
-            clean_title, source_from_title = clean_title_and_source(item["title"])
-            item["title"] = clean_title
-            item["source"] = source_from_title or get_domain(item["link"])
+            item["title"] = clean_title(item["title"])
+            item["source"] = get_domain(item["link"])
             if item.get("published"):
                 dt = datetime(*item["published"][:6])
                 item["published_hkt"] = dt.astimezone(HKT).strftime("%Y-%m-%d %H:%M HKT")
