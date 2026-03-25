@@ -1,12 +1,12 @@
 # ====================
-# Code Version: Ver 4.6 - 修正來源顯示問題
+# Code Version: Ver 4.7 - 來源顯示最終修正
 # ====================
 
 import streamlit as st
 import feedparser
 from datetime import datetime, date, timedelta
 import pytz
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 HKT = pytz.timezone('Asia/Hong_Kong')
 
@@ -15,18 +15,48 @@ HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", 
 
 WORLD_WHITE_LIST = {"straitstimes.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "economist.com", "telegraph.co.uk", "usatoday.com", "ft.com", "theguardian.com", "washingtonpost.com", "bloomberg.com", "afp.com", "apnews.com", "reuters.com", "ftchinese.com", "rfi.fr", "dw.com", "zh.cn.nikkei.com", "m.cn.nytimes.com", "ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com", "caijing.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "chinadaily.com.cn", "qstheory.cn", "xinhuanet.com", "people.com.cn", "aljazeera.com", "bbc.com"}
 
+# 常見媒體名稱美化映射
+SOURCE_MAP = {
+    "mingpao.com": "明報",
+    "hk01.com": "香港01",
+    "scmp.com": "南華早報",
+    "hket.com": "香港經濟日報",
+    "hkej.com": "信報",
+    "orientaldaily.on.cc": "東方日報",
+    "stheadline.com": "星島日報",
+    "rthk.hk": "香港電台",
+    "news.gov.hk": "香港政府新聞網",
+    "bbc.com": "BBC",
+    "reuters.com": "路透社",
+    "nytimes.com": "紐約時報",
+    "ftchinese.com": "金融時報中文網",
+}
+
 def get_clean_source(title, link):
-    # 優先從標題尾巴提取媒體名稱（如 " - 明報新聞網"）
+    # 1. 優先從標題尾巴提取（如 " - 明報新聞網"）
     if " - " in title:
         parts = title.rsplit(" - ", 1)
         if len(parts) == 2:
-            source = parts[1].strip()
-            if len(source) > 2 and "新聞" not in source and "報" not in source[:4]:  # 避免太長或奇怪名稱
-                return source
-    # 如果標題提取不到，再從 link 取 domain
+            candidate = parts[1].strip()
+            if 2 <= len(candidate) <= 20:
+                return SOURCE_MAP.get(candidate.lower(), candidate)
+
+    # 2. 嘗試從 Google 中轉連結解析來源
+    try:
+        if "news.google.com" in link:
+            parsed = urlparse(link)
+            params = parse_qs(parsed.query)
+            if 'url' in params:
+                real_url = params['url'][0]
+                domain = urlparse(real_url).netloc.replace("www.", "")
+                return SOURCE_MAP.get(domain, domain)
+    except:
+        pass
+
+    # 3. 最後 fallback 到 domain
     try:
         domain = urlparse(link).netloc.replace("www.", "").replace("news.google.com", "")
-        return domain if domain else "未知來源"
+        return SOURCE_MAP.get(domain, domain) if domain else "未知來源"
     except:
         return "未知來源"
 
@@ -79,8 +109,8 @@ def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None):
     return f"https://news.google.com/rss/search?q={q}{date_str}&hl={hl}&gl={gl}&ceid={ceid}"
 
 # ==================== UI ====================
-st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.6", layout="wide")
-st.title("🌐 全球公民新聞搜尋平台（Ver 4.6）")
+st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.7", layout="wide")
+st.title("🌐 全球公民新聞搜尋平台（Ver 4.7）")
 
 region = st.radio("選擇搜尋區域", ["1. 香港媒體（優先白名單）", "2. 中國/台灣/世界華文媒體"], horizontal=True)
 query = st.text_input("輸入關鍵字（英文可用 \"精確短語\" ）")
@@ -102,14 +132,12 @@ if st.button("開始搜尋", type="primary"):
     hl = "zh-HK" if is_hk else "zh-TW"
     ceid = "HK:zh-Hant" if is_hk else "TW:zh-Hant"
 
-    # World Engine 英文關鍵字自動切英文模式
     if not is_hk and any(c.isascii() and not c.isdigit() for c in query):
         hl = "en"
         gl = "US"
         ceid = "US:en"
 
     with st.spinner("正在搜尋..."):
-        # Batch 白名單
         batch_size = 8
         white_results = []
         for i in range(0, len(white_list), batch_size):
@@ -117,17 +145,14 @@ if st.button("開始搜尋", type="primary"):
             url = build_url(query, gl, hl, ceid, start_date, end_date, batch)
             white_results.extend(fetch_google_news(url))
 
-        # 全網補漏
         full_url = build_url(query, gl, hl, ceid, start_date, end_date)
         supplement = fetch_google_news(full_url)
 
-        # 去重
         seen_links = {item["link"] for item in white_results}
         supplement = [item for item in supplement if item["link"] not in seen_links]
 
         all_results = white_results + supplement
 
-        # 處理顯示
         for item in all_results:
             item["title"] = clean_title(item["title"])
             item["source"] = get_clean_source(item["title"], item["link"])
