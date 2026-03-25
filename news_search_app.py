@@ -1,8 +1,5 @@
 # ====================
-# Code Version: Ver 4.1 - Google News RSS + 後處理白名單 + 全網補漏
-# 香港模式：先 filter HK 白名單（置前） → 再 gl=HK 全網補漏
-# 大中華模式：先 filter World 白名單（置前） → 再 gl=TW 全網補漏
-# 去重 + 日期預設 7 天 + HKT 顯示
+# Code Version: Ver 4.3 - Batch site: + 白名單強制優先 + 乾淨顯示
 # ====================
 
 import streamlit as st
@@ -13,15 +10,15 @@ from urllib.parse import urlparse
 
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# ==================== 白名單（你之前定好嘅） ====================
+# ==================== 白名單 ====================
 HK_WHITE_LIST = [
     "rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com",
     "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com",
-    "hongkongfp.com", "skypost.hk", "thechasernews.co.uk", "pulsehknews.com", "thecollectivehk.com",
+    "hongkongfp.com", "skypost.hk", "pulsehknews.com", "thecollectivehk.com",
     "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk",
     "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com",
-    "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "stepaper.stheadline.com",
-    "eastweek.stheadline.com", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"
+    "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc",
+    "hkej.com", "mingpao.com", "etnet.com.hk"
 ]
 
 WORLD_WHITE_LIST = [
@@ -41,6 +38,17 @@ def get_domain(link):
     except:
         return "未知來源"
 
+def clean_summary(text):
+    if not text:
+        return ""
+    # 清除 Google 包裝的 HTML 標籤
+    if '<a href' in text:
+        text = text.split('<a href', 1)[0]
+    if '<font color' in text:
+        text = text.split('<font color', 1)[0]
+    text = text.replace('<', ' ').replace('>', ' ').replace('&nbsp;', ' ').strip()
+    return text
+
 def fetch_google_news(url):
     try:
         feed = feedparser.parse(url, request_headers={'User-Agent': 'Mozilla/5.0'})
@@ -48,41 +56,42 @@ def fetch_google_news(url):
         for entry in feed.entries:
             link = entry.get('link', '')
             if link:
-                pub = entry.get('published_parsed')
                 articles.append({
                     "title": entry.get('title', '無標題'),
                     "link": link,
-                    "source": get_domain(link),
-                    "summary": entry.get('summary', entry.get('description', '')),
-                    "published": pub
+                    "summary": clean_summary(entry.get('summary', entry.get('description', ''))),
+                    "published": entry.get('published_parsed')
                 })
         return articles
     except Exception as e:
         st.error(f"Google News 拉取失敗: {e}")
         return []
 
-def build_url(query, gl, hl, ceid, start_date=None, end_date=None):
-    q = query.replace(" ", "+")
-    
-    date_parts = []
-    if start_date:
-        date_parts.append(f"after:{start_date.strftime('%Y-%m-%d')}")
-    if end_date:
-        date_parts.append(f"before:{end_date.strftime('%Y-%m-%d')}")
-    
-    # 關鍵：用 + 連接所有部分，無空格
-    full_q = q
-    if date_parts:
-        full_q += "+" + "+".join(date_parts)  # 用 + 連接 after/before
-    
-    return f"https://news.google.com/rss/search?q={full_q}&hl={hl}&gl={gl}&ceid={ceid}"
+def build_batch_urls(query, sites, gl, hl, ceid, start_date=None, end_date=None, batch_size=10):
+    """把白名單分成多批，每批最多 batch_size 個 site:"""
+    urls = []
+    for i in range(0, len(sites), batch_size):
+        batch = sites[i:i+batch_size]
+        site_str = "+OR+".join(f"site:{s}" for s in batch)
+        q = f"{query.replace(' ', '+')}+({site_str})"
+        
+        date_parts = []
+        if start_date:
+            date_parts.append(f"after:{start_date.strftime('%Y-%m-%d')}")
+        if end_date:
+            date_parts.append(f"before:{end_date.strftime('%Y-%m-%d')}")
+        date_str = "+" + "+".join(date_parts) if date_parts else ""
+        
+        url = f"https://news.google.com/rss/search?q={q}{date_str}&hl={hl}&gl={gl}&ceid={ceid}"
+        urls.append(url)
+    return urls
 
 # ==================== UI ====================
-st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.1", layout="wide")
-st.title("🌐 全球公民新聞搜尋平台（Ver 4.1）")
+st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.3", layout="wide")
+st.title("🌐 全球公民新聞搜尋平台（Ver 4.3）")
 
 region = st.radio("選擇搜尋區域", ["1. 香港媒體（優先白名單）", "2. 中國/台灣/世界華文媒體"], horizontal=True)
-query = st.text_input("輸入關鍵字（例如：伊朗、樓市、國安法）")
+query = st.text_input("輸入關鍵字")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -96,44 +105,51 @@ if st.button("開始搜尋", type="primary"):
         st.stop()
 
     is_hk = "香港" in region
-    white_list = set(HK_WHITE_LIST if is_hk else WORLD_WHITE_LIST)  # 用 set 加速查詢
+    white_list = HK_WHITE_LIST if is_hk else WORLD_WHITE_LIST
     gl = "HK" if is_hk else "TW"
     hl = "zh-HK" if is_hk else "zh-TW"
     ceid = "HK:zh-Hant" if is_hk else "TW:zh-Hant"
 
-    with st.spinner("正在搜尋...（白名單優先）"):
-        # 1. 先拉全網（穩定、無 URL 長度問題）
-        full_url = build_url(query, gl, hl, ceid, start_date, end_date)
-        all_raw_results = fetch_google_news(full_url)
-        
-        if not all_raw_results:
-            st.warning("Google News 暫無結果，請稍後再試或改關鍵字")
-            st.stop()
-        
-        # 2. 過濾白名單（置前）
-        white_results = [item for item in all_raw_results if item["source"] in white_list]
-        
-        # 3. 補漏（全網中不在白名單的）
-        supplement = [item for item in all_raw_results if item["source"] not in white_list]
-        
-        # 合併：白名單先 + 補漏後
+    with st.spinner("正在搜尋...（白名單優先 + Batch site）"):
+        # 1. Batch site: 搜白名單（分批，避免 URL 過長）
+        batch_urls = build_batch_urls(query, white_list, gl, hl, ceid, start_date, end_date, batch_size=8)
+        white_results = []
+        for url in batch_urls:
+            white_results.extend(fetch_google_news(url))
+
+        # 2. 全網補漏
+        full_url = f"https://news.google.com/rss/search?q={query.replace(' ', '+')}&hl={hl}&gl={gl}&ceid={ceid}"
+        if start_date:
+            full_url += f"+after:{start_date.strftime('%Y-%m-%d')}"
+        if end_date:
+            full_url += f"+before:{end_date.strftime('%Y-%m-%d')}"
+        supplement = fetch_google_news(full_url)
+
+        # 3. 去重 + 白名單優先
+        seen_links = {item["link"] for item in white_results}
+        supplement = [item for item in supplement if item["link"] not in seen_links]
+
+        # 合併：白名單永遠置前
         all_results = white_results + supplement
-        
-        # 轉 HKT + 排序（時間倒序）
+
+        # 加上時間與乾淨來源
         for item in all_results:
+            domain = get_domain(item["link"])
+            item["source"] = domain  # 暫時用 domain，之後可再美化
             if item["published"]:
                 dt = datetime(*item["published"][:6])
                 item["published_hkt"] = dt.astimezone(HKT).strftime("%Y-%m-%d %H:%M HKT")
             else:
                 item["published_hkt"] = "未知時間"
-        
-        all_results.sort(key=lambda x: x.get("published", (0,0,0,0,0,0)), reverse=True)
+
+        all_results.sort(key=lambda x: x.get("published", (0,)), reverse=True)
 
         st.success(f"找到 {len(all_results)} 筆新聞（白名單優先）")
-        
+
         for news in all_results:
-            st.markdown(f"### {news['title']}")
+            clean_title = news["title"].split(" - ")[0] if " - " in news["title"] else news["title"]
+            st.markdown(f"### {clean_title}")
             st.caption(f"來源：{news['source']} | {news['published_hkt']}")
-            st.write(news['summary'][:300] + "..." if len(news['summary']) > 300 else news['summary'])
+            st.write(news["summary"])
             st.markdown(f"[閱讀全文]({news['link']})")
             st.divider()
