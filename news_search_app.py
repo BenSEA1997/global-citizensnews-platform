@@ -1,4 +1,4 @@
-# Code Version: Ver 4.6 - 英文關鍵字優化 + 新增英文全球模式
+# Code Version: Ver 4.6 (Final) - 英文關鍵字優化 + 介面簡化
 # ====================
 
 import streamlit as st
@@ -14,7 +14,7 @@ HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", 
 
 WORLD_WHITE_LIST = {"straitstimes.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "economist.com", "telegraph.co.uk", "usatoday.com", "ft.com", "theguardian.com", "washingtonpost.com", "bloomberg.com", "afp.com", "apnews.com", "reuters.com", "ftchinese.com", "rfi.fr", "dw.com", "zh.cn.nikkei.com", "m.cn.nytimes.com", "ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com", "caijing.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "chinadaily.com.cn", "qstheory.cn", "xinhuanet.com", "people.com.cn", "aljazeera.com", "bbc.com"}
 
-# 新增：英文國際媒體白名單（用於新模式）
+# 英文國際媒體白名單
 ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "usatoday.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "telegraph.co.uk", "economist.com"}
 
 def get_domain(link):
@@ -70,11 +70,12 @@ def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None, u
     if not q_clean:
         q = ""
     else:
-        if use_exact and not any(c.isascii() and not c.isalnum() and c not in " -'" for c in q_clean):  # 簡易判斷是否純英文
+        if use_exact and not any(c.isascii() and not c.isalnum() and c not in " -'" for c in q_clean):
+            # 中文保持精確短語
             phrase = q_clean.replace(" ", "+")
             q = f"%22{phrase}%22"
         else:
-            # 多字英文用 AND 鬆散匹配
+            # 英文多字使用 AND 鬆散匹配
             words = q_clean.split()
             q = "+AND+".join(words) if len(words) > 1 else q_clean
     
@@ -92,11 +93,15 @@ def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None, u
     return f"https://news.google.com/rss/search?q={q}{date_str}&hl={hl}&gl={gl}&ceid={ceid}"
 
 # ==================== UI ====================
-st.set_page_config(page_title="全球公民新聞搜尋平台 - Ver 4.6", layout="wide")
-st.title("🌐 全球公民新聞搜尋平台（Ver 4.6）")
-st.caption("🔧 英文多字優化 + 新增英文全球模式（解決 RSS 結果過少問題）")
+st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
+st.title("🌐 全球新聞搜尋平台")
+st.caption("🔧 Ver 4.6 (Final) - RSS 搜尋最理想版本")
 
-region_options = ["1. 香港媒體（優先白名單）", "2. 中國/台灣/世界華文媒體", "3. 英文全球媒體（推薦搜英文關鍵字）"]
+region_options = [
+    "1. 香港媒體（優先白名單）", 
+    "2. 中國/台灣/世界華文媒體", 
+    "3. 英文全球媒體"
+]
 region = st.radio("選擇搜尋區域", region_options, horizontal=True)
 
 query = st.text_input("輸入關鍵字", placeholder="例如：宏福苑、Larry Fink、Trump Gold Card")
@@ -126,7 +131,7 @@ if st.button("開始搜尋", type="primary"):
         gl = "HK" if is_hk else "TW"
         hl = "zh-HK" if is_hk else "zh-TW"
         ceid = "HK:zh-Hant" if is_hk else "TW:zh-Hant"
-        use_exact = True   # 中文保持精確
+        use_exact = True
 
     with st.spinner("正在搜尋並過濾..."):
         batch_size = 8
@@ -157,10 +162,7 @@ if st.button("開始搜尋", type="primary"):
 
         all_results.sort(key=lambda x: x.get("published", (0,)), reverse=True)
 
-        st.success(f"找到 {len(all_results)} 則相關新聞（RSS 限制最多約100則）")
-
-        if len(all_results) < 20 and not is_english_global:
-            st.info("💡 結果較少？試試切換到「3. 英文全球媒體」模式，或把日期範圍拉長。")
+        st.success(f"找到 {len(all_results)} 則相關新聞")
 
         for news in all_results:
             st.markdown(f"### {news['title']}")
