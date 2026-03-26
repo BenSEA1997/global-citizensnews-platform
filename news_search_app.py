@@ -1,4 +1,4 @@
-# Code Version: Ver 4.6 (Final) - 英文關鍵字優化 + 介面簡化
+# Code Version: Ver 4.61 - 新增中國大陸媒體模式
 # ====================
 
 import streamlit as st
@@ -12,7 +12,10 @@ HKT = pytz.timezone('Asia/Hong_Kong')
 # ==================== 白名單 ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "pulsehknews.com", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 
-WORLD_WHITE_LIST = {"straitstimes.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "economist.com", "telegraph.co.uk", "usatoday.com", "ft.com", "theguardian.com", "washingtonpost.com", "bloomberg.com", "afp.com", "apnews.com", "reuters.com", "ftchinese.com", "rfi.fr", "dw.com", "zh.cn.nikkei.com", "m.cn.nytimes.com", "ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com", "caijing.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "chinadaily.com.cn", "qstheory.cn", "xinhuanet.com", "people.com.cn", "aljazeera.com", "bbc.com"}
+TAIWAN_WORLD_WHITE_LIST = {"straitstimes.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "economist.com", "telegraph.co.uk", "usatoday.com", "ft.com", "theguardian.com", "washingtonpost.com", "bloomberg.com", "afp.com", "apnews.com", "reuters.com", "ftchinese.com", "rfi.fr", "dw.com", "zh.cn.nikkei.com", "m.cn.nytimes.com", "ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com", "caijing.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "chinadaily.com.cn", "qstheory.cn", "xinhuanet.com", "people.com.cn", "aljazeera.com", "bbc.com"}
+
+# 中國大陸媒體白名單（重點優化簡體中文來源）
+MAINLAND_CHINA_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "qstheory.cn", "news.cn", "gov.cn", "cctv.com", "cntv.cn", "cgtn.com"}
 
 # 英文國際媒體白名單
 ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "usatoday.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "telegraph.co.uk", "economist.com"}
@@ -71,11 +74,9 @@ def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None, u
         q = ""
     else:
         if use_exact and not any(c.isascii() and not c.isalnum() and c not in " -'" for c in q_clean):
-            # 中文保持精確短語
             phrase = q_clean.replace(" ", "+")
             q = f"%22{phrase}%22"
         else:
-            # 英文多字使用 AND 鬆散匹配
             words = q_clean.split()
             q = "+AND+".join(words) if len(words) > 1 else q_clean
     
@@ -95,16 +96,17 @@ def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None, u
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 4.6 (Final) - RSS 搜尋最理想版本")
+st.caption("🔧 Ver 4.61 - 新增中國大陸媒體模式")
 
 region_options = [
     "1. 香港媒體（優先白名單）", 
-    "2. 中國/台灣/世界華文媒體", 
-    "3. 英文全球媒體"
+    "2. 台灣/世界華文媒體", 
+    "3. 英文全球媒體",
+    "4. 中國大陸媒體（簡體中文）"
 ]
 region = st.radio("選擇搜尋區域", region_options, horizontal=True)
 
-query = st.text_input("輸入關鍵字", placeholder="例如：宏福苑、Larry Fink、Trump Gold Card")
+query = st.text_input("輸入關鍵字", placeholder="例如：宏福苑、Larry Fink、Trump Gold Card、习近平")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -118,19 +120,33 @@ if st.button("開始搜尋", type="primary"):
         st.stop()
 
     is_hk = "香港" in region
+    is_taiwan_world = "台灣/世界華文" in region
     is_english_global = "英文全球" in region
+    is_mainland = "中國大陸" in region
 
-    if is_english_global:
+    if is_mainland:
+        white_list = MAINLAND_CHINA_WHITE_LIST
+        gl = "CN"
+        hl = "zh-CN"
+        ceid = "CN:zh-Hans"
+        use_exact = True
+    elif is_english_global:
         white_list = ENGLISH_GLOBAL_LIST
         gl = "US"
         hl = "en"
         ceid = "US:en"
         use_exact = False
-    else:
-        white_list = HK_WHITE_LIST if is_hk else WORLD_WHITE_LIST
-        gl = "HK" if is_hk else "TW"
-        hl = "zh-HK" if is_hk else "zh-TW"
-        ceid = "HK:zh-Hant" if is_hk else "TW:zh-Hant"
+    elif is_hk:
+        white_list = HK_WHITE_LIST
+        gl = "HK"
+        hl = "zh-HK"
+        ceid = "HK:zh-Hant"
+        use_exact = True
+    else:  # 台灣/世界華文媒體
+        white_list = TAIWAN_WORLD_WHITE_LIST
+        gl = "TW"
+        hl = "zh-TW"
+        ceid = "TW:zh-Hant"
         use_exact = True
 
     with st.spinner("正在搜尋並過濾..."):
