@@ -1,4 +1,4 @@
-# Code Version: Ver 4.61 - 新增中國大陸媒體模式
+# Code Version: Ver 4.62 - 加強日期過濾（二次過濾 + 優化 build_url）
 # ====================
 
 import streamlit as st
@@ -14,10 +14,8 @@ HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", 
 
 TAIWAN_WORLD_WHITE_LIST = {"straitstimes.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "economist.com", "telegraph.co.uk", "usatoday.com", "ft.com", "theguardian.com", "washingtonpost.com", "bloomberg.com", "afp.com", "apnews.com", "reuters.com", "ftchinese.com", "rfi.fr", "dw.com", "zh.cn.nikkei.com", "m.cn.nytimes.com", "ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com", "caijing.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "chinadaily.com.cn", "qstheory.cn", "xinhuanet.com", "people.com.cn", "aljazeera.com", "bbc.com"}
 
-# 中國大陸媒體白名單（重點優化簡體中文來源）
 MAINLAND_CHINA_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "qstheory.cn", "news.cn", "gov.cn", "cctv.com", "cntv.cn", "cgtn.com"}
 
-# 英文國際媒體白名單
 ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "usatoday.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "telegraph.co.uk", "economist.com"}
 
 def get_domain(link):
@@ -50,6 +48,30 @@ def is_relevant(title: str, summary: str, query: str) -> bool:
     summary_lower = summary.lower() if summary else ""
     return q_lower in title_lower or q_lower in summary_lower
 
+# ==================== 新增：二次日期過濾 ====================
+def filter_by_date(articles, start_date, end_date):
+    """二次過濾：只保留落在指定日期範圍內的新聞"""
+    if not start_date or not end_date:
+        return articles
+    
+    filtered = []
+    for item in articles:
+        if item.get("published"):
+            try:
+                # published_parsed 是 tuple (year, month, day, ...)
+                dt = datetime(*item["published"][:6])
+                article_date = dt.date()
+                if start_date <= article_date <= end_date:
+                    filtered.append(item)
+            except:
+                # 如果日期解析失敗，保守保留（避免誤刪）
+                filtered.append(item)
+        else:
+            # 沒有日期的文章暫時保留
+            filtered.append(item)
+    
+    return filtered
+
 def fetch_google_news(url):
     try:
         feed = feedparser.parse(url, request_headers={'User-Agent': 'Mozilla/5.0'})
@@ -68,27 +90,31 @@ def fetch_google_news(url):
         st.error(f"Google News 拉取失敗: {e}")
         return []
 
-def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None, use_exact=True):
+def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None):
     q_clean = query.strip()
-    if not q_clean:
-        q = ""
+    if q_clean:
+        phrase = q_clean.replace(" ", "+")
+        q = f"%22{phrase}%22"
     else:
-        if use_exact and not any(c.isascii() and not c.isalnum() and c not in " -'" for c in q_clean):
-            phrase = q_clean.replace(" ", "+")
-            q = f"%22{phrase}%22"
-        else:
-            words = q_clean.split()
-            q = "+AND+".join(words) if len(words) > 1 else q_clean
+        q = ""
     
     if sites:
         site_str = "+OR+".join(f"site:{s}" for s in sites)
         q = f"({q})+({site_str})" if q else site_str
     
+    # 加強日期參數寫法（第一層過濾）
     date_parts = []
     if start_date:
         date_parts.append(f"after:{start_date.strftime('%Y-%m-%d')}")
     if end_date:
         date_parts.append(f"before:{end_date.strftime('%Y-%m-%d')}")
+    
+    # 額外加入 when: 參數（對近期新聞有幫助）
+    if start_date and end_date:
+        days_diff = (end_date - start_date).days
+        if days_diff <= 30:
+            date_parts.append(f"when:{days_diff+1}d")
+    
     date_str = "+" + "+".join(date_parts) if date_parts else ""
     
     return f"https://news.google.com/rss/search?q={q}{date_str}&hl={hl}&gl={gl}&ceid={ceid}"
@@ -96,7 +122,7 @@ def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None, u
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 4.61 - 新增中國大陸媒體模式")
+st.caption("🔧 Ver 4.62 - 加強日期過濾（二次過濾）")
 
 region_options = [
     "1. 香港媒體（優先白名單）", 
@@ -106,11 +132,11 @@ region_options = [
 ]
 region = st.radio("選擇搜尋區域", region_options, horizontal=True)
 
-query = st.text_input("輸入關鍵字", placeholder="例如：宏福苑、Larry Fink、Trump Gold Card、习近平")
+query = st.text_input("輸入關鍵字", placeholder="例如：宏福苑、Larry Fink、李家超")
 
 col1, col2 = st.columns(2)
 with col1:
-    start_date = st.date_input("開始日期（預設3天）", value=date.today() - timedelta(days=3))
+    start_date = st.date_input("開始日期", value=date.today() - timedelta(days=3))
 with col2:
     end_date = st.date_input("結束日期", value=date.today())
 
@@ -142,30 +168,36 @@ if st.button("開始搜尋", type="primary"):
         hl = "zh-HK"
         ceid = "HK:zh-Hant"
         use_exact = True
-    else:  # 台灣/世界華文媒體
+    else:  # 台灣/世界華文
         white_list = TAIWAN_WORLD_WHITE_LIST
         gl = "TW"
         hl = "zh-TW"
         ceid = "TW:zh-Hant"
         use_exact = True
 
-    with st.spinner("正在搜尋並過濾..."):
+    with st.spinner("正在搜尋並進行日期過濾..."):
         batch_size = 8
         white_results = []
         for i in range(0, len(white_list), batch_size):
             batch = list(white_list)[i:i+batch_size]
-            url = build_url(query, gl, hl, ceid, start_date, end_date, batch, use_exact)
+            url = build_url(query, gl, hl, ceid, start_date, end_date, batch)
             white_results.extend(fetch_google_news(url))
 
-        full_url = build_url(query, gl, hl, ceid, start_date, end_date, None, use_exact)
+        full_url = build_url(query, gl, hl, ceid, start_date, end_date)
         supplement = fetch_google_news(full_url)
 
         seen_links = {item["link"] for item in white_results}
         supplement = [item for item in supplement if item["link"] not in seen_links]
 
         all_results = white_results + supplement
+
+        # === 關鍵改進：二次日期過濾 ===
+        all_results = filter_by_date(all_results, start_date, end_date)
+
+        # 相關性過濾
         all_results = [item for item in all_results if is_relevant(item["title"], item.get("summary", ""), query)]
 
+        # 處理顯示
         for item in all_results:
             clean_title, source_from_title = clean_title_and_source(item["title"])
             item["title"] = clean_title
@@ -178,7 +210,7 @@ if st.button("開始搜尋", type="primary"):
 
         all_results.sort(key=lambda x: x.get("published", (0,)), reverse=True)
 
-        st.success(f"找到 {len(all_results)} 則相關新聞")
+        st.success(f"找到 {len(all_results)} 則相關新聞（已進行二次日期過濾）")
 
         for news in all_results:
             st.markdown(f"### {news['title']}")
