@@ -1,6 +1,3 @@
-# Code Version: Ver 5.3 - 加強地區控制 + 長連結清理 + 混合模式優化
-# ====================
-
 import streamlit as st
 import feedparser
 import requests
@@ -19,19 +16,27 @@ MAINLAND_CHINA_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.c
 
 ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "usatoday.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "telegraph.co.uk", "economist.com"}
 
+# ==================== 新增：譯名自動擴展 ====================
+def expand_query_for_region(query: str, region: str) -> str:
+    q = query.strip()
+    if "台灣/世界華文" in region:
+        if "特朗普" in q and "川普" not in q:
+            return f"({q} OR 川普)"
+        if "川普" in q and "特朗普" not in q:
+            return f"({q} OR 特朗普)"
+    elif "香港" in region:
+        if "川普" in q and "特朗普" not in q:
+            return f"({q} OR 特朗普)"
+    return q
+
 # ==================== 工具函數 ====================
 def clean_google_link(link):
-    """徹底清理 Google News 長連結"""
     try:
         if "news.google.com" in link:
             if "url=" in link:
                 parsed = urlparse(link)
                 query_params = parse_qs(parsed.query)
-                real_url = query_params.get("url", [link])[0]
-                return real_url
-            # 如果還是 Google 轉址，嘗試其他方式
-            if "/articles/" in link or "/rss/" in link:
-                return link
+                return query_params.get("url", [link])[0]
         return link
     except:
         return link
@@ -105,28 +110,28 @@ def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None):
         q = f"%22{phrase}%22"
     else:
         q = ""
-    
+   
     if sites:
         site_str = "+OR+".join(f"site:{s}" for s in sites)
         q = f"({q})+({site_str})" if q else site_str
-    
+   
     date_parts = []
     if start_date:
         date_parts.append(f"after:{start_date.strftime('%Y-%m-%d')}")
     if end_date:
         date_parts.append(f"before:{end_date.strftime('%Y-%m-%d')}")
-    
+   
     if start_date and end_date:
         days_diff = (end_date - start_date).days
         if days_diff <= 60:
             date_parts.append(f"when:{days_diff + 2}d")
-    
+   
     date_str = "+" + "+".join(date_parts) if date_parts else ""
     return f"https://news.google.com/rss/search?q={q}{date_str}&hl={hl}&gl={gl}&ceid={ceid}"
 
 GNEWS_API_URL = "https://gnews.io/api/v4/search"
 
-def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_articles=30):
+def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_articles=50):
     try:
         params = {
             "token": api_key,
@@ -137,7 +142,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
             "country": country,
             "max": max_articles,
             "sortby": "publishedAt",
-            "in": "title,description"   # 加強匹配
+            "in": "title,description"
         }
         response = requests.get(GNEWS_API_URL, params=params, timeout=20)
         data = response.json()
@@ -158,20 +163,20 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 5.3 - 加強地區控制與長連結清理")
+st.caption("🔧 Ver 5.4 - 地區嚴格鎖定 + 譯名自動擴展 + 移除多餘 Link")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
 region_options = [
-    "1. 香港媒體（優先白名單）", 
-    "2. 台灣/世界華文媒體", 
+    "1. 香港媒體（優先白名單）",
+    "2. 台灣/世界華文媒體",
     "3. 英文全球媒體",
     "4. 中國大陸媒體（簡體中文）",
     "5. Google + GNews 合併搜尋（智能日期切換）"
 ]
 region = st.radio("選擇搜尋區域", region_options, horizontal=True)
 
-query = st.text_input("輸入關鍵字", placeholder="例如：鄭習會、李家超、Trump、特朗普")
+query = st.text_input("輸入關鍵字", placeholder="例如：鄭習會、李家超、Trump、特朗普、川普")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -185,8 +190,6 @@ if st.button("開始搜尋", type="primary"):
         st.stop()
 
     is_hybrid = "合併搜尋" in region
-
-    # 正確定義所有變數
     is_hk = "香港" in region
     is_mainland = "中國大陸" in region
     is_taiwan_world = "台灣/世界華文" in region
@@ -209,26 +212,24 @@ if st.button("開始搜尋", type="primary"):
             white_list = TAIWAN_WORLD_WHITE_LIST
             gl, hl, ceid = "TW", "zh-TW", "TW:zh-Hant"
 
+    # 譯名自動擴展
+    expanded_query = expand_query_for_region(query, region)
+
     with st.spinner("正在搜尋並過濾..."):
         all_results = []
 
-        # Google RSS 部分
+        # ==================== Google RSS（僅白名單，嚴格地區控制） ====================
         if not is_hybrid or (is_hybrid and (end_date - start_date).days <= 60):
             batch_size = 8
             white_results = []
             for i in range(0, len(white_list), batch_size):
                 batch = list(white_list)[i:i+batch_size]
-                url = build_url(query, gl, hl, ceid, start_date, end_date, batch)
+                url = build_url(expanded_query, gl, hl, ceid, start_date, end_date, batch)
                 white_results.extend(fetch_google_news(url))
 
-            full_url = build_url(query, gl, hl, ceid, start_date, end_date)
-            supplement = fetch_google_news(full_url)
+            all_results.extend(white_results)   # ← 移除 supplement，徹底杜絕跨區
 
-            seen_links = {item["link"] for item in white_results}
-            supplement = [item for item in supplement if item["link"] not in seen_links]
-            all_results.extend(white_results + supplement)
-
-        # GNews 部分 - 加強參數
+        # ==================== GNews ====================
         if is_hybrid or (end_date - start_date).days > 60:
             if is_mainland:
                 gnews_lang, gnews_country = "zh", "cn"
@@ -241,10 +242,10 @@ if st.button("開始搜尋", type="primary"):
             else:
                 gnews_lang, gnews_country = "zh", "hk"
 
-            gnews_results = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key, max_articles=50)
+            gnews_results = fetch_gnews(expanded_query, start_date, end_date, gnews_lang, gnews_country, api_key, max_articles=50)
             all_results.extend(gnews_results)
 
-        # 去重 + 過濾
+        # ==================== 去重 + 過濾 ====================
         seen_links = set()
         unique_results = []
         for item in all_results:
@@ -256,23 +257,21 @@ if st.button("開始搜尋", type="primary"):
         unique_results = filter_by_date(unique_results, start_date, end_date)
         unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query)]
 
-        # 顯示處理
+        # ==================== 顯示處理 ====================
         for item in unique_results:
             item["link"] = clean_google_link(item.get("link", ""))
             clean_title, source_from_title = clean_title_and_source(item.get("title", ""))
             item["title"] = clean_title
             item["source"] = source_from_title or item.get("source", get_domain(item.get("link", "")))
-            
-            if item.get("published"):
-                try:
-                    if isinstance(item["published"], str):
-                        dt = datetime.fromisoformat(item["published"].replace("Z", "+00:00"))
-                    else:
-                        dt = datetime(*item["published"][:6])
-                    item["published_hkt"] = dt.astimezone(HKT).strftime("%Y-%m-%d %H:%M HKT")
-                except:
-                    item["published_hkt"] = "未知時間"
-            else:
+
+            # 時間轉 HKT
+            try:
+                if isinstance(item["published"], str):
+                    dt = datetime.fromisoformat(item["published"].replace("Z", "+00:00"))
+                else:
+                    dt = datetime(*item["published"][:6])
+                item["published_hkt"] = dt.astimezone(HKT).strftime("%Y-%m-%d %H:%M HKT")
+            except:
                 item["published_hkt"] = "未知時間"
 
         unique_results.sort(key=lambda x: x.get("published", ""), reverse=True)
@@ -280,9 +279,9 @@ if st.button("開始搜尋", type="primary"):
         st.success(f"找到 {len(unique_results)} 則相關新聞")
 
         for news in unique_results:
-            st.markdown(f"### {news.get('title', '無標題')}")
+            title = news.get('title', '無標題')
+            link = news.get('link', '#')
+            st.markdown(f"### [{title}]({link})")          # ← 標題可點擊，移除多餘 Link
             st.caption(f"來源：{news.get('source', '未知')} | {news.get('published_hkt', '未知時間')}")
             st.write(news.get("summary", ""))
-            st.markdown(f"[閱讀全文]({news.get('link', '#')})")
             st.divider()
-       
