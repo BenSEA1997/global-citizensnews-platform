@@ -1,4 +1,4 @@
-# Code Version: Ver 5.2 - 修正 NameError、地區混亂、長連結問題
+# Code Version: Ver 5.3 - 加強地區控制 + 長連結清理 + 混合模式優化
 # ====================
 
 import streamlit as st
@@ -21,12 +21,17 @@ ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", 
 
 # ==================== 工具函數 ====================
 def clean_google_link(link):
-    """清理 Google News 的長追蹤連結"""
+    """徹底清理 Google News 長連結"""
     try:
-        if "news.google.com" in link and "url=" in link:
-            parsed = urlparse(link)
-            query_params = parse_qs(parsed.query)
-            return query_params.get("url", [link])[0]
+        if "news.google.com" in link:
+            if "url=" in link:
+                parsed = urlparse(link)
+                query_params = parse_qs(parsed.query)
+                real_url = query_params.get("url", [link])[0]
+                return real_url
+            # 如果還是 Google 轉址，嘗試其他方式
+            if "/articles/" in link or "/rss/" in link:
+                return link
         return link
     except:
         return link
@@ -121,7 +126,7 @@ def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None):
 
 GNEWS_API_URL = "https://gnews.io/api/v4/search"
 
-def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_articles=25):
+def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_articles=30):
     try:
         params = {
             "token": api_key,
@@ -131,9 +136,10 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
             "lang": lang,
             "country": country,
             "max": max_articles,
-            "sortby": "publishedAt"
+            "sortby": "publishedAt",
+            "in": "title,description"   # 加強匹配
         }
-        response = requests.get(GNEWS_API_URL, params=params, timeout=15)
+        response = requests.get(GNEWS_API_URL, params=params, timeout=20)
         data = response.json()
         articles = []
         for article in data.get("articles", []):
@@ -152,7 +158,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 5.2 - 修正 NameError、地區混亂、長連結")
+st.caption("🔧 Ver 5.3 - 加強地區控制與長連結清理")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
@@ -165,7 +171,7 @@ region_options = [
 ]
 region = st.radio("選擇搜尋區域", region_options, horizontal=True)
 
-query = st.text_input("輸入關鍵字", placeholder="例如：鄭習會、李家超、Trump")
+query = st.text_input("輸入關鍵字", placeholder="例如：鄭習會、李家超、Trump、特朗普")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -180,7 +186,7 @@ if st.button("開始搜尋", type="primary"):
 
     is_hybrid = "合併搜尋" in region
 
-    # === 正確定義所有變數，避免 NameError ===
+    # 正確定義所有變數
     is_hk = "香港" in region
     is_mainland = "中國大陸" in region
     is_taiwan_world = "台灣/世界華文" in region
@@ -222,9 +228,8 @@ if st.button("開始搜尋", type="primary"):
             supplement = [item for item in supplement if item["link"] not in seen_links]
             all_results.extend(white_results + supplement)
 
-        # GNews 部分
+        # GNews 部分 - 加強參數
         if is_hybrid or (end_date - start_date).days > 60:
-            # 加強地區語言控制
             if is_mainland:
                 gnews_lang, gnews_country = "zh", "cn"
             elif is_hk:
@@ -236,7 +241,7 @@ if st.button("開始搜尋", type="primary"):
             else:
                 gnews_lang, gnews_country = "zh", "hk"
 
-            gnews_results = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key, max_articles=30)
+            gnews_results = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key, max_articles=50)
             all_results.extend(gnews_results)
 
         # 去重 + 過濾
