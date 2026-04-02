@@ -1,4 +1,4 @@
-# Code Version: Ver 5.1 - 完整修正版（按鈕 + 長連結 + 日期 + HK來源）
+# Code Version: Ver 5.2 - 修正 NameError、地區混亂、長連結問題
 # ====================
 
 import streamlit as st
@@ -21,12 +21,12 @@ ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", 
 
 # ==================== 工具函數 ====================
 def clean_google_link(link):
+    """清理 Google News 的長追蹤連結"""
     try:
         if "news.google.com" in link and "url=" in link:
             parsed = urlparse(link)
             query_params = parse_qs(parsed.query)
-            real_url = query_params.get("url", [link])[0]
-            return real_url
+            return query_params.get("url", [link])[0]
         return link
     except:
         return link
@@ -152,7 +152,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 5.1 - 完整修正版")
+st.caption("🔧 Ver 5.2 - 修正 NameError、地區混亂、長連結")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
@@ -165,7 +165,7 @@ region_options = [
 ]
 region = st.radio("選擇搜尋區域", region_options, horizontal=True)
 
-query = st.text_input("輸入關鍵字", placeholder="例如：鄭習會、李家超")
+query = st.text_input("輸入關鍵字", placeholder="例如：鄭習會、李家超、Trump")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -180,15 +180,16 @@ if st.button("開始搜尋", type="primary"):
 
     is_hybrid = "合併搜尋" in region
 
-    # 定義參數
+    # === 正確定義所有變數，避免 NameError ===
+    is_hk = "香港" in region
+    is_mainland = "中國大陸" in region
+    is_taiwan_world = "台灣/世界華文" in region
+    is_english_global = "英文全球" in region
+
     if is_hybrid:
         white_list = []
         gl = hl = ceid = None
     else:
-        is_hk = "香港" in region
-        is_mainland = "中國大陸" in region
-        is_english_global = "英文全球" in region
-
         if is_mainland:
             white_list = MAINLAND_CHINA_WHITE_LIST
             gl, hl, ceid = "CN", "zh-CN", "CN:zh-Hans"
@@ -223,8 +224,18 @@ if st.button("開始搜尋", type="primary"):
 
         # GNews 部分
         if is_hybrid or (end_date - start_date).days > 60:
-            gnews_lang = "zh" if (is_mainland or is_hk or "台灣" in region) else "en"
-            gnews_country = "hk" if is_hk else "cn" if is_mainland else "tw" if "台灣" in region else "us"
+            # 加強地區語言控制
+            if is_mainland:
+                gnews_lang, gnews_country = "zh", "cn"
+            elif is_hk:
+                gnews_lang, gnews_country = "zh", "hk"
+            elif is_taiwan_world:
+                gnews_lang, gnews_country = "zh", "tw"
+            elif is_english_global:
+                gnews_lang, gnews_country = "en", "us"
+            else:
+                gnews_lang, gnews_country = "zh", "hk"
+
             gnews_results = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key, max_articles=30)
             all_results.extend(gnews_results)
 
