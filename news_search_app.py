@@ -1,7 +1,7 @@
 import streamlit as st
 import feedparser
 import requests
-import re   # ← 這一行是關鍵，之前缺少導致錯誤
+import re
 from datetime import datetime, date, timedelta
 import pytz
 from urllib.parse import urlparse
@@ -76,7 +76,8 @@ def fetch_google_news(url):
                     "title": entry.get('title', '無標題'),
                     "link": link,
                     "summary": clean_summary(entry.get('summary', entry.get('description', ''))),
-                    "published": entry.get('published_parsed')
+                    "published": entry.get('published_parsed'),
+                    "source_type": "Google"
                 })
         return articles
     except Exception as e:
@@ -121,7 +122,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
                 "link": article.get("url", ""),
                 "summary": article.get("description", ""),
                 "published": article.get("publishedAt"),
-                "source": article.get("source", {}).get("name", "GNews")
+                "source_type": "GNews"
             })
         return articles, data.get("totalArticles", 0)
     except Exception as e:
@@ -131,7 +132,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 6.2 - 修正 re 錯誤 + 以 Ver 4.62 為基礎 + 60 天分界")
+st.caption("🔧 Ver 6.3 - 解決白名單過濾過嚴 + 地區混亂 + 來源標記 + 時間顯示問題")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
@@ -180,7 +181,7 @@ if st.button("開始搜尋", type="primary"):
         gl, hl, ceid = "TW", "zh-TW", "TW:zh-Hant"
         gnews_lang, gnews_country = "zh", "tw"
 
-    with st.spinner("正在搜尋並收集診斷數據..."):
+    with st.spinner("正在搜尋..."):
         all_results = []
         google_raw = 0
         gnews_raw = 0
@@ -189,7 +190,7 @@ if st.button("開始搜尋", type="primary"):
         days_diff = (end_date - start_date).days
         is_hybrid_mode = use_hybrid
 
-        # Google RSS（以 Ver 4.62 方式為主）
+        # Google RSS - 白名單優先
         batch_size = 8
         for i in range(0, len(white_list), batch_size):
             batch = list(white_list)[i:i+batch_size]
@@ -198,13 +199,14 @@ if st.button("開始搜尋", type="primary"):
             google_raw += len(batch_results)
             all_results.extend(batch_results)
 
-        if not is_hybrid_mode or days_diff <= 60:
+        # 補充機制（只在香港或合併近期使用）
+        if (is_hk or (is_hybrid_mode and days_diff <= 60)):
             full_url = build_url(query, gl, hl, ceid, start_date, end_date)
             supplement = fetch_google_news(full_url)
             google_raw += len(supplement)
             all_results.extend(supplement)
 
-        # GNews（60天後優先）
+        # GNews - 合併模式下永遠補漏
         if is_hybrid_mode or days_diff > 60:
             gnews_articles, gnews_total = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key)
             gnews_raw = len(gnews_articles)
@@ -217,18 +219,23 @@ if st.button("開始搜尋", type="primary"):
                         "link": link,
                         "summary": article.get("description", ""),
                         "published": article.get("publishedAt"),
-                        "source": "GNews"
+                        "source_type": "GNews"
                     })
 
         # 最終過濾
         unique_results = filter_by_date(all_results, start_date, end_date)
         unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query)]
 
-        # 顯示處理
+        # 顯示處理 + 來源標記
         for item in unique_results:
             clean_title, source_from_title = clean_title_and_source(item.get("title", ""))
             item["title"] = clean_title
-            item["source"] = source_from_title or get_domain(item.get("link", ""))
+            source = item.get("source", get_domain(item.get("link", "")))
+            if item.get("source_type") == "GNews":
+                item["source"] = f"{source} (GNews)"
+            else:
+                item["source"] = f"{source} (Google)"
+
             try:
                 if isinstance(item.get("published"), str):
                     dt = datetime.fromisoformat(item["published"].replace("Z", "+00:00"))
@@ -261,5 +268,6 @@ if st.button("開始搜尋", type="primary"):
             st.write(f"API totalArticles: **{gnews_total}**")
             st.subheader("最終結果")
             st.write(f"顯示數量: **{len(unique_results)}**")
+
 
 
