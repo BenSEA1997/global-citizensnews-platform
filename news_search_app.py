@@ -132,7 +132,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 6.4 - 90天分界 + 台灣嚴格控制 + Gnews優先遠期 + 來源標記")
+st.caption("🔧 Ver 6.5 - 90天分界 + Gnews遠期優先 + 解決 Gnews 不顯示問題")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
@@ -190,37 +190,60 @@ if st.button("開始搜尋", type="primary"):
         days_diff = (end_date - start_date).days
         is_hybrid_mode = use_hybrid
 
-        # ==================== Google RSS ====================
-        batch_size = 8
-        for i in range(0, len(white_list), batch_size):
-            batch = list(white_list)[i:i+batch_size]
-            url = build_url(query, gl, hl, ceid, start_date, end_date, batch)
-            batch_results = fetch_google_news(url)
-            google_raw += len(batch_results)
-            all_results.extend(batch_results)
-
-        # 補充機制（只在香港、中國、英文模式或近期台灣使用）
-        if not is_taiwan_world or (is_taiwan_world and days_diff <= 90):
-            full_url = build_url(query, gl, hl, ceid, start_date, end_date)
-            supplement = fetch_google_news(full_url)
-            google_raw += len(supplement)
-            all_results.extend(supplement)
-
-        # ==================== GNews ====================
-        if is_hybrid_mode or days_diff > 90:
+        # ==================== 90天分界邏輯 ====================
+        if days_diff > 90:
+            # 90天前：Gnews 優先
             gnews_articles, gnews_total = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key)
             gnews_raw = len(gnews_articles)
-            seen = {item.get("link") for item in all_results if item.get("link")}
             for article in gnews_articles:
-                link = article.get("url", "")
-                if link and link not in seen:
-                    all_results.append({
-                        "title": article.get("title", "無標題"),
-                        "link": link,
-                        "summary": article.get("description", ""),
-                        "published": article.get("publishedAt"),
-                        "source_type": "GNews"
-                    })
+                all_results.append({
+                    "title": article.get("title", "無標題"),
+                    "link": article.get("url", ""),
+                    "summary": article.get("description", ""),
+                    "published": article.get("publishedAt"),
+                    "source_type": "GNews"
+                })
+
+            # 再用 Google 補充
+            batch_size = 8
+            for i in range(0, len(white_list), batch_size):
+                batch = list(white_list)[i:i+batch_size]
+                url = build_url(query, gl, hl, ceid, start_date, end_date, batch)
+                batch_results = fetch_google_news(url)
+                google_raw += len(batch_results)
+                all_results.extend(batch_results)
+        else:
+            # 90天內：Google 優先
+            batch_size = 8
+            for i in range(0, len(white_list), batch_size):
+                batch = list(white_list)[i:i+batch_size]
+                url = build_url(query, gl, hl, ceid, start_date, end_date, batch)
+                batch_results = fetch_google_news(url)
+                google_raw += len(batch_results)
+                all_results.extend(batch_results)
+
+            # 補充全域（香港、中國、英文允許，台灣不允許）
+            if not is_taiwan_world:
+                full_url = build_url(query, gl, hl, ceid, start_date, end_date)
+                supplement = fetch_google_news(full_url)
+                google_raw += len(supplement)
+                all_results.extend(supplement)
+
+            # Gnews 補漏
+            if is_hybrid_mode:
+                gnews_articles, gnews_total = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key)
+                gnews_raw = len(gnews_articles)
+                seen = {item.get("link") for item in all_results if item.get("link")}
+                for article in gnews_articles:
+                    link = article.get("url", "")
+                    if link and link not in seen:
+                        all_results.append({
+                            "title": article.get("title", "無標題"),
+                            "link": link,
+                            "summary": article.get("description", ""),
+                            "published": article.get("publishedAt"),
+                            "source_type": "GNews"
+                        })
 
         # 最終過濾
         unique_results = filter_by_date(all_results, start_date, end_date)
