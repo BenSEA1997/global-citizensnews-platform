@@ -1,6 +1,7 @@
 import streamlit as st
 import feedparser
 import requests
+import re   # ← 這一行是關鍵，之前缺少導致錯誤
 from datetime import datetime, date, timedelta
 import pytz
 from urllib.parse import urlparse
@@ -130,7 +131,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 6.1 - 以 Ver 4.62 為基礎 + 診斷面板 + 60 天分界")
+st.caption("🔧 Ver 6.2 - 修正 re 錯誤 + 以 Ver 4.62 為基礎 + 60 天分界")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
@@ -184,34 +185,30 @@ if st.button("開始搜尋", type="primary"):
         google_raw = 0
         gnews_raw = 0
         gnews_total = 0
-        google_urls = []
 
         days_diff = (end_date - start_date).days
         is_hybrid_mode = use_hybrid
 
-        # ==================== Google RSS (參考 Ver 4.62 做法) ====================
+        # Google RSS（以 Ver 4.62 方式為主）
         batch_size = 8
         for i in range(0, len(white_list), batch_size):
             batch = list(white_list)[i:i+batch_size]
             url = build_url(query, gl, hl, ceid, start_date, end_date, batch)
-            google_urls.append(url)
             batch_results = fetch_google_news(url)
             google_raw += len(batch_results)
             all_results.extend(batch_results)
 
-        # 補充全域搜尋（僅在非合併或近期使用）
         if not is_hybrid_mode or days_diff <= 60:
             full_url = build_url(query, gl, hl, ceid, start_date, end_date)
-            google_urls.append(full_url)
             supplement = fetch_google_news(full_url)
             google_raw += len(supplement)
             all_results.extend(supplement)
 
-        # ==================== GNews（60 天後優先） ====================
+        # GNews（60天後優先）
         if is_hybrid_mode or days_diff > 60:
             gnews_articles, gnews_total = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key)
             gnews_raw = len(gnews_articles)
-            seen = {item["link"] for item in all_results}
+            seen = {item.get("link") for item in all_results if item.get("link")}
             for article in gnews_articles:
                 link = article.get("url", "")
                 if link and link not in seen:
@@ -220,11 +217,10 @@ if st.button("開始搜尋", type="primary"):
                         "link": link,
                         "summary": article.get("description", ""),
                         "published": article.get("publishedAt"),
-                        "source": article.get("source", {}).get("name", "GNews")
+                        "source": "GNews"
                     })
-                    seen.add(link)
 
-        # ==================== 最終過濾 ====================
+        # 最終過濾
         unique_results = filter_by_date(all_results, start_date, end_date)
         unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query)]
 
@@ -244,7 +240,7 @@ if st.button("開始搜尋", type="primary"):
 
         unique_results.sort(key=lambda x: x.get("published", ""), reverse=True)
 
-        # ==================== 顯示結果 ====================
+        # 顯示結果
         mode = "合併搜尋測試模式 (60天分界)" if is_hybrid_mode else "標準模式"
         st.success(f"找到 {len(unique_results)} 則相關新聞 | {mode}")
 
@@ -256,21 +252,14 @@ if st.button("開始搜尋", type="primary"):
             st.write(news.get("summary", ""))
             st.divider()
 
-        # ==================== 詳細診斷面板 ====================
-        with st.expander("🔍 詳細搜尋診斷面板（點擊展開查看呼叫情況）", expanded=True):
+        # 詳細診斷面板
+        with st.expander("🔍 詳細搜尋診斷面板（點擊展開）", expanded=True):
             st.subheader("Google RSS")
             st.write(f"Raw 抓取總數: **{google_raw}** 則")
-            if google_urls:
-                st.write("最後一次呼叫 URL:")
-                st.code(google_urls[-1])
-
             st.subheader("GNews")
             st.write(f"Raw 返回總數: **{gnews_raw}** 則")
             st.write(f"API totalArticles: **{gnews_total}**")
+            st.subheader("最終結果")
+            st.write(f"顯示數量: **{len(unique_results)}**")
 
-            st.subheader("過濾統計")
-            st.write(f"最終顯示數量: **{len(unique_results)}**")
-
-            if len(unique_results) == 0 and google_raw > 0:
-                st.warning("Google 有抓到文章，但經過相關性或日期過濾後剩下 0 則")
 
