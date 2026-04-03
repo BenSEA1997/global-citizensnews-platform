@@ -40,11 +40,24 @@ def clean_summary(text):
     text = text.replace('&nbsp;', ' ').strip()
     return text
 
-def is_relevant(title: str, summary: str, query: str) -> bool:
+def is_relevant(title: str, summary: str, query: str, is_old_news: bool = False) -> bool:
     if not query or not title:
         return True
     q_lower = query.lower().strip()
-    return q_lower in title.lower() or q_lower in (summary or "").lower()
+    title_lower = title.lower()
+    summary_lower = (summary or "").lower()
+
+    if q_lower in title_lower:
+        return True
+    if q_lower in summary_lower:
+        return True
+
+    # 遠期新聞放寬過濾
+    if is_old_news:
+        query_words = [word for word in q_lower.split() if len(word) > 1]
+        if query_words and any(w in title_lower or w in summary_lower for w in query_words):
+            return True
+    return False
 
 def filter_by_date(articles, start_date, end_date):
     if not start_date or not end_date:
@@ -132,7 +145,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 6.5 - 90天分界 + Gnews遠期優先 + 解決 Gnews 不顯示問題")
+st.caption("🔧 Ver 6.6 - 90天分界 + Gnews遠期強制優先 + 解決 Gnews 不顯示問題")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
@@ -190,9 +203,8 @@ if st.button("開始搜尋", type="primary"):
         days_diff = (end_date - start_date).days
         is_hybrid_mode = use_hybrid
 
-        # ==================== 90天分界邏輯 ====================
         if days_diff > 90:
-            # 90天前：Gnews 優先
+            # ==================== 90天前：Gnews 強制優先 ====================
             gnews_articles, gnews_total = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key)
             gnews_raw = len(gnews_articles)
             for article in gnews_articles:
@@ -213,7 +225,7 @@ if st.button("開始搜尋", type="primary"):
                 google_raw += len(batch_results)
                 all_results.extend(batch_results)
         else:
-            # 90天內：Google 優先
+            # ==================== 90天內：Google 優先 ====================
             batch_size = 8
             for i in range(0, len(white_list), batch_size):
                 batch = list(white_list)[i:i+batch_size]
@@ -222,7 +234,7 @@ if st.button("開始搜尋", type="primary"):
                 google_raw += len(batch_results)
                 all_results.extend(batch_results)
 
-            # 補充全域（香港、中國、英文允許，台灣不允許）
+            # 補充機制（台灣模式不補充）
             if not is_taiwan_world:
                 full_url = build_url(query, gl, hl, ceid, start_date, end_date)
                 supplement = fetch_google_news(full_url)
@@ -245,9 +257,10 @@ if st.button("開始搜尋", type="primary"):
                             "source_type": "GNews"
                         })
 
-        # 最終過濾
+        # 最終過濾（遠期新聞放寬）
+        is_old_news = days_diff > 90
         unique_results = filter_by_date(all_results, start_date, end_date)
-        unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query)]
+        unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query, is_old_news)]
 
         # 顯示處理 + 來源標記
         for item in unique_results:
