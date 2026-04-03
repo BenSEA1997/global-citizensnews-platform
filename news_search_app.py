@@ -3,8 +3,7 @@ import feedparser
 import requests
 from datetime import datetime, date, timedelta
 import pytz
-from urllib.parse import urlparse, parse_qs
-import re
+from urllib.parse import urlparse
 
 HKT = pytz.timezone('Asia/Hong_Kong')
 
@@ -16,26 +15,6 @@ TAIWAN_WORLD_WHITE_LIST = {"straitstimes.com", "dailymail.co.uk", "mirror.co.uk"
 MAINLAND_CHINA_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "qstheory.cn", "news.cn", "gov.cn", "cctv.com", "cntv.cn", "cgtn.com"}
 
 ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "usatoday.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "telegraph.co.uk", "economist.com"}
-
-# ==================== 工具函數 ====================
-def expand_query_for_region(query: str, region: str) -> str:
-    q = query.strip()
-    if "台灣/世界華文" in region and "特朗普" in q:
-        return f"({q} OR 川普)"
-    if "香港" in region and "川普" in q:
-        return f"({q} OR 特朗普)"
-    return q
-
-def clean_google_link(link):
-    try:
-        if "news.google.com" in link:
-            if "/rss/articles/" in link or "url=" in link:
-                parsed = urlparse(link)
-                query_params = parse_qs(parsed.query)
-                return query_params.get("url", [link])[0]
-        return link
-    except:
-        return link
 
 def get_domain(link):
     try:
@@ -60,21 +39,11 @@ def clean_summary(text):
     text = text.replace('&nbsp;', ' ').strip()
     return text
 
-def is_relevant(title: str, summary: str, query: str, strict_mode: bool = True) -> bool:
+def is_relevant(title: str, summary: str, query: str) -> bool:
     if not query or not title:
         return True
     q_lower = query.lower().strip()
-    title_lower = title.lower()
-    summary_lower = (summary or "").lower()
-    if q_lower in title_lower:
-        return True
-    if not strict_mode and q_lower in summary_lower:
-        return True
-    if not strict_mode:
-        query_words = [word for word in q_lower.split() if len(word) > 1]
-        if query_words and all(any(w in title_lower or w in summary_lower for w in query_words)):
-            return True
-    return False
+    return q_lower in title.lower() or q_lower in (summary or "").lower()
 
 def filter_by_date(articles, start_date, end_date):
     if not start_date or not end_date:
@@ -95,23 +64,27 @@ def filter_by_date(articles, start_date, end_date):
             filtered.append(item)
     return filtered
 
-def is_in_whitelist(link, whitelist):
-    if not link or not whitelist:
-        return True
-    domain = get_domain(link)
-    return any(domain.endswith(site) or site in domain for site in whitelist)
-
 def fetch_google_news(url):
     try:
         feed = feedparser.parse(url, request_headers={'User-Agent': 'Mozilla/5.0'})
-        return feed.entries
+        articles = []
+        for entry in feed.entries:
+            link = entry.get('link', '')
+            if link:
+                articles.append({
+                    "title": entry.get('title', '無標題'),
+                    "link": link,
+                    "summary": clean_summary(entry.get('summary', entry.get('description', ''))),
+                    "published": entry.get('published_parsed')
+                })
+        return articles
     except Exception as e:
         st.error(f"Google News 拉取失敗: {e}")
         return []
 
 def build_url(query, gl, hl, ceid, start_date=None, end_date=None, sites=None):
     q_clean = query.strip()
-    q = q_clean.replace(" ", "+") if q_clean else ""   # 移除強制 exact phrase
+    q = q_clean.replace(" ", "+") if q_clean else ""
     if sites:
         site_str = "+OR+".join(f"site:{s}" for s in sites)
         q = f"({q})+({site_str})" if q else site_str
@@ -140,7 +113,16 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
         }
         response = requests.get(GNEWS_API_URL, params=params, timeout=25)
         data = response.json()
-        return data.get("articles", []), data.get("totalArticles", 0)
+        articles = []
+        for article in data.get("articles", []):
+            articles.append({
+                "title": article.get("title", "無標題"),
+                "link": article.get("url", ""),
+                "summary": article.get("description", ""),
+                "published": article.get("publishedAt"),
+                "source": article.get("source", {}).get("name", "GNews")
+            })
+        return articles, data.get("totalArticles", 0)
     except Exception as e:
         st.error(f"GNews 拉取失敗: {e}")
         return [], 0
@@ -148,7 +130,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 6.0 - 加入完整搜尋診斷面板 + 修正大部分 0 結果問題")
+st.caption("🔧 Ver 6.1 - 以 Ver 4.62 為基礎 + 診斷面板 + 60 天分界")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
@@ -160,9 +142,9 @@ region_options = [
 ]
 region = st.radio("選擇主要搜尋區域", region_options, horizontal=True)
 
-use_hybrid = st.checkbox("✅ 啟用合併搜尋測試模式（Google + GNews，測試舊新聞補充）", value=False)
+use_hybrid = st.checkbox("✅ 啟用合併搜尋測試模式（60 天分界測試）", value=False)
 
-query = st.text_input("輸入關鍵字", placeholder="例如：衞志樑、李家超、Trump、特朗普")
+query = st.text_input("輸入關鍵字", placeholder="例如：李家超、衞志樑、Trump、特朗普")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -197,79 +179,62 @@ if st.button("開始搜尋", type="primary"):
         gl, hl, ceid = "TW", "zh-TW", "TW:zh-Hant"
         gnews_lang, gnews_country = "zh", "tw"
 
-    expanded_query = expand_query_for_region(query, region)
-    days_diff = (end_date - start_date).days
-    is_hybrid_mode = use_hybrid
-
     with st.spinner("正在搜尋並收集診斷數據..."):
         all_results = []
-        google_raw_count = 0
-        google_whitelist_count = 0
-        gnews_raw_count = 0
+        google_raw = 0
+        gnews_raw = 0
         gnews_total = 0
         google_urls = []
 
-        # Google RSS
-        if white_list:
-            batch_size = 4 if (is_hybrid_mode and days_diff > 60) else 6
-            for i in range(0, len(white_list), batch_size):
-                batch = list(white_list)[i:i+batch_size]
-                url = build_url(expanded_query, gl, hl, ceid, start_date, end_date, batch)
-                google_urls.append(url)
-                entries = fetch_google_news(url)
-                google_raw_count += len(entries)
-                batch_results = []
-                for entry in entries:
-                    link = entry.get('link', '')
-                    if link:
-                        clean_link = clean_google_link(link)
-                        batch_results.append({
-                            "title": entry.get('title', '無標題'),
-                            "link": clean_link,
-                            "summary": clean_summary(entry.get('summary', entry.get('description', ''))),
-                            "published": entry.get('published_parsed')
-                        })
-                batch_results = [item for item in batch_results if is_in_whitelist(item.get("link", ""), white_list)]
-                google_whitelist_count += len(batch_results)
-                all_results.extend(batch_results)
+        days_diff = (end_date - start_date).days
+        is_hybrid_mode = use_hybrid
 
-        # GNews
-        if is_hybrid_mode:
-            gnews_articles, gnews_total = fetch_gnews(expanded_query, start_date, end_date, gnews_lang, gnews_country, api_key)
-            gnews_raw_count = len(gnews_articles)
-            seen_links = {item.get("link") for item in all_results}
-            gnews_results = []
+        # ==================== Google RSS (參考 Ver 4.62 做法) ====================
+        batch_size = 8
+        for i in range(0, len(white_list), batch_size):
+            batch = list(white_list)[i:i+batch_size]
+            url = build_url(query, gl, hl, ceid, start_date, end_date, batch)
+            google_urls.append(url)
+            batch_results = fetch_google_news(url)
+            google_raw += len(batch_results)
+            all_results.extend(batch_results)
+
+        # 補充全域搜尋（僅在非合併或近期使用）
+        if not is_hybrid_mode or days_diff <= 60:
+            full_url = build_url(query, gl, hl, ceid, start_date, end_date)
+            google_urls.append(full_url)
+            supplement = fetch_google_news(full_url)
+            google_raw += len(supplement)
+            all_results.extend(supplement)
+
+        # ==================== GNews（60 天後優先） ====================
+        if is_hybrid_mode or days_diff > 60:
+            gnews_articles, gnews_total = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key)
+            gnews_raw = len(gnews_articles)
+            seen = {item["link"] for item in all_results}
             for article in gnews_articles:
                 link = article.get("url", "")
-                if link and link not in seen_links:
-                    gnews_results.append({
+                if link and link not in seen:
+                    all_results.append({
                         "title": article.get("title", "無標題"),
                         "link": link,
                         "summary": article.get("description", ""),
                         "published": article.get("publishedAt"),
                         "source": article.get("source", {}).get("name", "GNews")
                     })
-            all_results.extend(gnews_results)
+                    seen.add(link)
 
-        # 最終過濾
-        seen_links = set()
-        unique_results = [item for item in all_results if item.get("link") and item["link"] not in seen_links]
-
-        unique_results = filter_by_date(unique_results, start_date, end_date)
-
-        strict_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query, strict_mode=True)]
-        final_results = strict_results
-        if len(strict_results) < 12:
-            final_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query, strict_mode=False)]
+        # ==================== 最終過濾 ====================
+        unique_results = filter_by_date(all_results, start_date, end_date)
+        unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query)]
 
         # 顯示處理
-        for item in final_results:
-            item["link"] = clean_google_link(item.get("link", ""))
+        for item in unique_results:
             clean_title, source_from_title = clean_title_and_source(item.get("title", ""))
             item["title"] = clean_title
-            item["source"] = source_from_title or item.get("source", get_domain(item.get("link", "")))
+            item["source"] = source_from_title or get_domain(item.get("link", ""))
             try:
-                if isinstance(item["published"], str):
+                if isinstance(item.get("published"), str):
                     dt = datetime.fromisoformat(item["published"].replace("Z", "+00:00"))
                 else:
                     dt = datetime(*item["published"][:6])
@@ -277,13 +242,13 @@ if st.button("開始搜尋", type="primary"):
             except:
                 item["published_hkt"] = "未知時間"
 
-        final_results.sort(key=lambda x: x.get("published", ""), reverse=True)
+        unique_results.sort(key=lambda x: x.get("published", ""), reverse=True)
 
-        # 顯示結果
-        mode = "合併搜尋測試模式" if is_hybrid_mode else "標準模式"
-        st.success(f"找到 {len(final_results)} 則相關新聞 | {mode}")
+        # ==================== 顯示結果 ====================
+        mode = "合併搜尋測試模式 (60天分界)" if is_hybrid_mode else "標準模式"
+        st.success(f"找到 {len(unique_results)} 則相關新聞 | {mode}")
 
-        for news in final_results:
+        for news in unique_results:
             title = news.get('title', '無標題')
             link = news.get('link', '#')
             st.markdown(f"### [{title}]({link})")
@@ -292,30 +257,20 @@ if st.button("開始搜尋", type="primary"):
             st.divider()
 
         # ==================== 詳細診斷面板 ====================
-        with st.expander("🔍 詳細搜尋診斷面板（點擊展開查看呼叫情況與 0 結果原因）", expanded=True):
-            st.subheader("Google RSS 呼叫情況")
-            st.write(f"Raw 抓取總數: **{google_raw_count}** 則")
-            st.write(f"白名單過濾後: **{google_whitelist_count}** 則")
+        with st.expander("🔍 詳細搜尋診斷面板（點擊展開查看呼叫情況）", expanded=True):
+            st.subheader("Google RSS")
+            st.write(f"Raw 抓取總數: **{google_raw}** 則")
             if google_urls:
-                st.write("最後一次呼叫的完整 URL（可直接複製到瀏覽器測試）:")
+                st.write("最後一次呼叫 URL:")
                 st.code(google_urls[-1])
 
-            st.subheader("GNews 呼叫情況")
-            st.write(f"Raw 返回總數: **{gnews_raw_count}** 則")
+            st.subheader("GNews")
+            st.write(f"Raw 返回總數: **{gnews_raw}** 則")
             st.write(f"API totalArticles: **{gnews_total}**")
 
-            st.subheader("過濾流程統計")
-            st.write(f"合併後總文章: {len(all_results)}")
-            st.write(f"去重 + 日期過濾後: {len(unique_results)}")
-            st.write(f"嚴格相關性過濾後: {len(strict_results)}")
-            st.write(f"**最終顯示數量: {len(final_results)}**")
+            st.subheader("過濾統計")
+            st.write(f"最終顯示數量: **{len(unique_results)}**")
 
-            if len(final_results) == 0:
-                st.error("🔴 目前為 0 結果，可能原因如下：")
-                if google_raw_count == 0 and gnews_raw_count == 0:
-                    st.write("• Google 和 GNews 都沒有抓到任何文章（最常見：query 建構問題）")
-                elif google_whitelist_count == 0 and google_raw_count > 0:
-                    st.write("• Google 有抓到文章，但全部被白名單過濾掉")
-                elif len(strict_results) == 0:
-                    st.write("• 文章被相關性過濾全部濾掉")
-                st.info("建議：展開上方 URL 到瀏覽器查看 Google 是否真的有結果")
+            if len(unique_results) == 0 and google_raw > 0:
+                st.warning("Google 有抓到文章，但經過相關性或日期過濾後剩下 0 則")
+
