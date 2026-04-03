@@ -132,7 +132,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 6.4 - 修復來源顯示 + 增加覆蓋量 + 加強地區控制 + GNews 顯示")
+st.caption("🔧 Ver 6.4 - 90天分界 + 台灣嚴格控制 + Gnews優先遠期 + 來源標記")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
@@ -144,7 +144,7 @@ region_options = [
 ]
 region = st.radio("選擇主要搜尋區域", region_options, horizontal=True)
 
-use_hybrid = st.checkbox("✅ 啟用合併搜尋測試模式（60 天分界測試）", value=False)
+use_hybrid = st.checkbox("✅ 啟用合併搜尋測試模式（90 天分界測試）", value=False)
 
 query = st.text_input("輸入關鍵字", placeholder="例如：李家超、衞志樑、Trump、特朗普")
 
@@ -176,7 +176,7 @@ if st.button("開始搜尋", type="primary"):
         white_list = HK_WHITE_LIST
         gl, hl, ceid = "HK", "zh-HK", "HK:zh-Hant"
         gnews_lang, gnews_country = "zh", "hk"
-    else:
+    else:  # 台灣/世界華文
         white_list = TAIWAN_WORLD_WHITE_LIST
         gl, hl, ceid = "TW", "zh-TW", "TW:zh-Hant"
         gnews_lang, gnews_country = "zh", "tw"
@@ -190,7 +190,7 @@ if st.button("開始搜尋", type="primary"):
         days_diff = (end_date - start_date).days
         is_hybrid_mode = use_hybrid
 
-        # Google RSS - 白名單優先
+        # ==================== Google RSS ====================
         batch_size = 8
         for i in range(0, len(white_list), batch_size):
             batch = list(white_list)[i:i+batch_size]
@@ -199,15 +199,15 @@ if st.button("開始搜尋", type="primary"):
             google_raw += len(batch_results)
             all_results.extend(batch_results)
 
-        # 補充機制（只在香港或合併近期使用，且白名單結果太少時補充）
-        if (is_hk or (is_hybrid_mode and days_diff <= 60)):
+        # 補充機制（只在香港、中國、英文模式或近期台灣使用）
+        if not is_taiwan_world or (is_taiwan_world and days_diff <= 90):
             full_url = build_url(query, gl, hl, ceid, start_date, end_date)
             supplement = fetch_google_news(full_url)
             google_raw += len(supplement)
             all_results.extend(supplement)
 
-        # GNews - 合併模式下永遠補漏
-        if is_hybrid_mode or days_diff > 60:
+        # ==================== GNews ====================
+        if is_hybrid_mode or days_diff > 90:
             gnews_articles, gnews_total = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key)
             gnews_raw = len(gnews_articles)
             seen = {item.get("link") for item in all_results if item.get("link")}
@@ -226,7 +226,7 @@ if st.button("開始搜尋", type="primary"):
         unique_results = filter_by_date(all_results, start_date, end_date)
         unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query)]
 
-        # 顯示處理 + 正確來源標記
+        # 顯示處理 + 來源標記
         for item in unique_results:
             clean_title, source_from_title = clean_title_and_source(item.get("title", ""))
             item["title"] = clean_title
@@ -248,7 +248,7 @@ if st.button("開始搜尋", type="primary"):
         unique_results.sort(key=lambda x: x.get("published", ""), reverse=True)
 
         # 顯示結果
-        mode = "合併搜尋測試模式 (60天分界)" if is_hybrid_mode else "標準模式"
+        mode = "合併搜尋測試模式 (90天分界)" if is_hybrid_mode else "標準模式"
         st.success(f"找到 {len(unique_results)} 則相關新聞 | {mode}")
 
         for news in unique_results:
