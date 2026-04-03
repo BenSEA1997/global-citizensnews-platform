@@ -132,7 +132,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 6.3 - 解決白名單過濾過嚴 + 地區混亂 + 來源標記 + 時間顯示問題")
+st.caption("🔧 Ver 6.4 - 修復來源顯示 + 增加覆蓋量 + 加強地區控制 + GNews 顯示")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
@@ -199,7 +199,7 @@ if st.button("開始搜尋", type="primary"):
             google_raw += len(batch_results)
             all_results.extend(batch_results)
 
-        # 補充機制（只在香港或合併近期使用）
+        # 補充機制（只在香港或合併近期使用，且白名單結果太少時補充）
         if (is_hk or (is_hybrid_mode and days_diff <= 60)):
             full_url = build_url(query, gl, hl, ceid, start_date, end_date)
             supplement = fetch_google_news(full_url)
@@ -226,15 +226,15 @@ if st.button("開始搜尋", type="primary"):
         unique_results = filter_by_date(all_results, start_date, end_date)
         unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query)]
 
-        # 顯示處理 + 來源標記
+        # 顯示處理 + 正確來源標記
         for item in unique_results:
             clean_title, source_from_title = clean_title_and_source(item.get("title", ""))
             item["title"] = clean_title
-            source = item.get("source", get_domain(item.get("link", "")))
+            base_source = source_from_title or get_domain(item.get("link", ""))
             if item.get("source_type") == "GNews":
-                item["source"] = f"{source} (GNews)"
+                item["source"] = f"{base_source} (GNews)"
             else:
-                item["source"] = f"{source} (Google)"
+                item["source"] = f"{base_source} (Google)"
 
             try:
                 if isinstance(item.get("published"), str):
