@@ -40,23 +40,6 @@ def clean_summary(text):
     text = text.replace('&nbsp;', ' ').strip()
     return text
 
-def is_relevant(title: str, summary: str, query: str, is_old_news: bool = False) -> bool:
-    if not query or not title:
-        return True
-    q_lower = query.lower().strip()
-    title_lower = title.lower()
-    summary_lower = (summary or "").lower()
-
-    if q_lower in title_lower or q_lower in summary_lower:
-        return True
-
-    # 90天前使用非常輕量的匹配
-    if is_old_news:
-        query_words = [word for word in q_lower.split() if len(word) > 1]
-        if query_words and any(w in title_lower or w in summary_lower for w in query_words):
-            return True
-    return False
-
 def filter_by_date(articles, start_date, end_date):
     if not start_date or not end_date:
         return articles
@@ -143,7 +126,7 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key, max_article
 # ==================== UI ====================
 st.set_page_config(page_title="全球新聞搜尋平台", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("🔧 Ver 6.8 - 90天分界 + 90天前強制顯示Gnews + 放鬆近期篩選")
+st.caption("🔧 Ver 6.9 - 90天前強制顯示所有 Gnews + 近期放鬆篩選")
 
 api_key = st.text_input("GNews API Key", type="password", help="輸入你的 GNews Essential Plan API Key")
 
@@ -203,7 +186,7 @@ if st.button("開始搜尋", type="primary"):
         is_old_news = days_diff > 90
 
         if is_old_news:
-            # ==================== 90天前：強制顯示所有 Gnews（不跑 is_relevant） ====================
+            # ==================== 90天前：強制顯示所有 Gnews（完全不跑 is_relevant 和 filter_by_date） ====================
             gnews_articles, gnews_total = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key)
             gnews_raw = len(gnews_articles)
             for article in gnews_articles:
@@ -256,10 +239,13 @@ if st.button("開始搜尋", type="primary"):
                             "source_type": "GNews"
                         })
 
-        # 最終過濾（90天前不跑 is_relevant，90天內正常過濾）
-        unique_results = filter_by_date(all_results, start_date, end_date)
+        # 最終過濾（90天前不跑任何過濾，90天內正常過濾）
         if not is_old_news:
+            unique_results = filter_by_date(all_results, start_date, end_date)
             unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query, False)]
+        else:
+            # 90天前：只做簡單日期檢查，不跑 is_relevant
+            unique_results = [item for item in all_results if True]  # 全部保留
 
         # 顯示處理 + 來源標記
         for item in unique_results:
