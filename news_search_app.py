@@ -40,6 +40,14 @@ def clean_summary(text):
     text = text.replace('&nbsp;', ' ').strip()
     return text
 
+def is_relevant(title: str, summary: str, query: str) -> bool:
+    if not query or not title:
+        return True
+    q_lower = query.lower().strip()
+    title_lower = title.lower()
+    summary_lower = (summary or "").lower()
+    return q_lower in title_lower or q_lower in summary_lower
+
 def filter_by_date(articles, start_date, end_date):
     if not start_date or not end_date:
         return articles
@@ -186,7 +194,7 @@ if st.button("開始搜尋", type="primary"):
         is_old_news = days_diff > 90
 
         if is_old_news:
-            # ==================== 90天前：強制顯示所有 Gnews（完全不跑 is_relevant 和 filter_by_date） ====================
+            # 90天前：強制顯示所有 Gnews（完全不跑 is_relevant 和 filter_by_date）
             gnews_articles, gnews_total = fetch_gnews(query, start_date, end_date, gnews_lang, gnews_country, api_key)
             gnews_raw = len(gnews_articles)
             for article in gnews_articles:
@@ -207,7 +215,7 @@ if st.button("開始搜尋", type="primary"):
                 google_raw += len(batch_results)
                 all_results.extend(batch_results)
         else:
-            # ==================== 90天內：Google 優先 + 放鬆篩選 ====================
+            # 90天內：Google 優先 + 放鬆篩選
             batch_size = 8
             for i in range(0, len(white_list), batch_size):
                 batch = list(white_list)[i:i+batch_size]
@@ -242,10 +250,16 @@ if st.button("開始搜尋", type="primary"):
         # 最終過濾（90天前不跑任何過濾，90天內正常過濾）
         if not is_old_news:
             unique_results = filter_by_date(all_results, start_date, end_date)
-            unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query, False)]
+            unique_results = [item for item in unique_results if is_relevant(item.get("title", ""), item.get("summary", ""), query)]
         else:
-            # 90天前：只做簡單日期檢查，不跑 is_relevant
-            unique_results = [item for item in all_results if True]  # 全部保留
+            # 90天前：只做簡單去重，不跑 is_relevant
+            seen = set()
+            unique_results = []
+            for item in all_results:
+                link = item.get("link", "")
+                if link and link not in seen:
+                    seen.add(link)
+                    unique_results.append(item)
 
         # 顯示處理 + 來源標記
         for item in unique_results:
@@ -266,29 +280,7 @@ if st.button("開始搜尋", type="primary"):
             except:
                 item["published_hkt"] = "未知時間"
 
-        unique_results.sort(key=lambda x: x.get("published", ""), reverse=True)
-
-        # 顯示結果
-        mode = "合併搜尋測試模式 (90天分界)" if is_hybrid_mode else "標準模式"
-        st.success(f"找到 {len(unique_results)} 則相關新聞 | {mode}")
-
-        for news in unique_results:
-            title = news.get('title', '無標題')
-            link = news.get('link', '#')
-            st.markdown(f"### [{title}]({link})")
-            st.caption(f"來源：{news.get('source', '未知')} | {news.get('published_hkt', '未知時間')}")
-            st.write(news.get("summary", ""))
-            st.divider()
-
-        # 詳細診斷面板
-        with st.expander("🔍 詳細搜尋診斷面板（點擊展開）", expanded=True):
-            st.subheader("Google RSS")
-            st.write(f"Raw 抓取總數: **{google_raw}** 則")
-            st.subheader("GNews")
-            st.write(f"Raw 返回總數: **{gnews_raw}** 則")
-            st.write(f"API totalArticles: **{gnews_total}**")
-            st.subheader("最終結果")
-            st.write(f"顯示數量: **{len(unique_results)}**")
+        unique_results.sort(key=lambda x: x.get
 
 
 
