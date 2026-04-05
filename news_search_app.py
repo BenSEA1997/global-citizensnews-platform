@@ -19,10 +19,11 @@ def get_domain(link):
     try: return urlparse(link).netloc.replace("www.", "")
     except: return "未知來源"
 
-def clean_summary(text):
-    if not text: return ""
-    text = re.sub(r'<[^>]+>', ' ', text)
-    return text.replace('&nbsp;', ' ').strip()
+def clean_title_only(title):
+    """移除標題中由 RSS 自動附加的媒體名稱 (通常在 ' - ' 之後)"""
+    if " - " in title:
+        return title.rsplit(" - ", 1)[0].strip()
+    return title.strip()
 
 def is_relevant_strict(title, summary, query):
     if not query: return True
@@ -40,7 +41,7 @@ def fetch_google_news(url):
         return [{
             "title": e.get('title', '無標題'),
             "link": e.get('link', ''),
-            "summary": clean_summary(e.get('summary', e.get('description', ''))),
+            "summary": e.get('summary', e.get('description', '')),
             "published": e.get('published_parsed'),
             "source_type": "Google"
         } for e in feed.entries if e.get('link')]
@@ -49,7 +50,6 @@ def fetch_google_news(url):
 def fetch_gnews(query, start_date, end_date, lang, country, api_key):
     if not api_key: return [], 0
     try:
-        # 簡化搜尋詞，避免 API 邏輯錯誤
         params = {
             "token": api_key, "q": f'"{query}"', "lang": lang, "country": country,
             "from": start_date.strftime("%Y-%m-%dT00:00:00Z"),
@@ -71,12 +71,11 @@ def fetch_gnews(query, start_date, end_date, lang, country, api_key):
     except: return [], 0
 
 # ==================== UI 與 核心邏輯 ====================
-st.set_page_config(page_title="全球新聞搜尋平台 Ver 6.4 Fixed", layout="wide")
+st.set_page_config(page_title="全球新聞搜尋平台 Ver 6.4.2", layout="wide")
 st.title("🌐 全球新聞搜尋平台")
-st.caption("Ver 6.4 Fixed - 修正報錯與 GNews 邏輯")
+st.caption("Ver 6.4.2 - 診斷增強版 | 移除摘要 | 整合來源行")
 
 api_key = st.text_input("GNews API Key", type="password")
-# 修正：確保 Radio 選項與下方的 if 判斷完全一致
 region = st.radio("選擇主要搜尋區域", ["1. 香港媒體", "2. 台灣/世界華文", "3. 英文全球", "4. 中國大陸"], horizontal=True)
 query = st.text_input("輸入關鍵字", placeholder="例如：李家超")
 
@@ -87,7 +86,6 @@ with col2: end_date = st.date_input("結束日期", value=date.today())
 if st.button("開始搜尋", type="primary"):
     if not query: st.stop()
 
-    # --- 修正後的區域映射 (徹底解決 NameError) ---
     if "中國大陸" in region: 
         current_white_list, gl, hl, ceid, g_l, g_c = MAINLAND_CHINA_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans", "zh", "cn"
     elif "英文" in region: 
@@ -103,25 +101,22 @@ if st.button("開始搜尋", type="primary"):
             date_str = f"+after:{sd}+before:{ed}"
             return f"https://news.google.com/rss/search?q={quote(q)}{site_str}{date_str}&hl={h}&gl={g}&ceid={c}"
 
-        # 1. Google RSS 抓取
+        # 1. 抓取
         raw_google_white = []
-        batch_size = 10
         white_list_list = list(current_white_list)
-        for i in range(0, len(white_list_list), batch_size):
-            batch = white_list_list[i:i+batch_size]
+        for i in range(0, len(white_list_list), 10):
+            batch = white_list_list[i:i+10]
             raw_google_white.extend(fetch_google_news(build_google_url(query, gl, hl, ceid, start_date, end_date, batch)))
         
         supplement_raw = fetch_google_news(build_google_url(query, gl, hl, ceid, start_date, end_date))
-        
-        # 2. GNews 抓取
         gn_articles, gn_total = fetch_gnews(query, start_date, end_date, g_l, g_c, api_key)
 
-        # 3. 處理與分類 (漏斗邏輯)
+        # 2. 分類與過濾
         final_core = []
         final_supplement = []
         seen_links = set()
 
-        # A. 處理核心白名單
+        # A. 核心白名單
         all_potential_core = raw_google_white + [a for a in gn_articles if get_domain(a['link']) in current_white_list]
         for item in all_potential_core:
             if item['link'] not in seen_links:
@@ -129,41 +124,58 @@ if st.button("開始搜尋", type="primary"):
                     final_core.append(item)
                     seen_links.add(item['link'])
 
-        # B. 處理補充層
+        # B. 補充層
         potential_supp = supplement_raw + [a for a in gn_articles if get_domain(a['link']) not in current_white_list]
         for item in potential_supp:
             if item['link'] not in seen_links:
-                # 補充層加入簡單區域過濾，減少滲透 (例如在香港模式下，排除明顯的 .tw 或 .cn 域名)
                 domain = get_domain(item['link'])
                 if "香港" in region and (".tw" in domain or ".cn" in domain): continue
-                if "台灣" in region and (".cn" in domain or "hk" in domain and ".com.hk" not in domain): continue
-                
+                if "台灣" in region and (".cn" in domain or ("hk" in domain and ".com.hk" not in domain)): continue
                 if is_relevant_loose(item['title'], query):
                     final_supplement.append(item)
                     seen_links.add(item['link'])
 
-        # C. 動態配額限制
-        max_supp_count = int(len(final_core) * 0.55) if len(final_core) > 5 else 15
-        final_supplement = final_supplement[:max_supp_count]
+        # C. 限制
+        max_supp = int(len(final_core) * 0.55) if len(final_core) > 5 else 15
+        final_supplement = final_supplement[:max_supp]
 
-        # 4. 排序與顯示
+        # 3. 排序與時間處理
         unique_results = final_core + final_supplement
-        # 統一時間排序
-        unique_results.sort(key=lambda x: str(x.get("published", "")), reverse=True)
+        
+        # 轉換時間用於排序
+        for item in unique_results:
+            try:
+                pub = item.get("published")
+                if isinstance(pub, str): # GNews 格式
+                    dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+                else: # Google 格式
+                    dt = datetime(*pub[:6], tzinfo=pytz.utc)
+                item["dt_hkt"] = dt.astimezone(HKT)
+            except:
+                item["dt_hkt"] = datetime.now(HKT)
 
-        st.success(f"找到 {len(unique_results)} 則新聞 (核心: {len(final_core)} | 補充: {len(final_supplement)})")
+        unique_results.sort(key=lambda x: x["dt_hkt"], reverse=True)
+
+        # 4. 顯示結果
+        st.success(f"找到 {len(unique_results)} 則新聞")
         
         for news in unique_results:
             domain = get_domain(news['link'])
             is_white = "✅" if domain in current_white_list else "🌐"
-            st.markdown(f"### {is_white} [{news['title']}]({news['link']})")
-            st.caption(f"來源：{domain} ({news['source_type']})")
-            st.write(news.get("summary", ""))
+            clean_t = clean_title_only(news['title'])
+            time_str = news["dt_hkt"].strftime("%Y-%m-%d %H:%M")
+            
+            st.markdown(f"### {is_white} [{clean_t}]({news['link']})")
+            # 整合行：來源媒體 | 日期時間 | 引擎
+            st.caption(f"來源：{domain} | {time_str} HKT | 搜尋引擎：{news['source_type']}")
             st.divider()
 
-        # 診斷面板
+        # 5. 診斷面板 (恢復命中計數)
         with st.expander("🔍 搜尋漏斗診斷"):
             c1, c2, c3 = st.columns(3)
             c1.metric("Google 白名單抓取", len(raw_google_white))
-            c2.metric("GNews API 總計", gn_total)
-            c3.metric("顯示 (核心+補充)", len(unique_results))
+            c2.metric("GNews API 總量", gn_total)
+            c3.metric("最終顯示總數", len(unique_results))
+            
+            st.write(f"**白名單命中 (Core):** {len(final_core)}")
+            st.write(f"**寬鬆補充 (Supplement):** {len(final_supplement)}")
