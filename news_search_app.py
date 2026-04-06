@@ -1,30 +1,38 @@
 import streamlit as st
 import feedparser
+import requests
 import re
 from datetime import datetime, date, timedelta, timezone
 from time import mktime
 import pytz
-from urllib.parse import quote
+from urllib.parse import urlparse, quote
 
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# ==================== 1. 媒體白名單與黑名單 (強化隔離) ====================
+# ==================== 1. 專業清單配置 ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "pulsehknews.com", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
-TAIWAN_WORLD_WHITE_LIST = {"straitstimes.com", "dailymail.co.uk", "economist.com", "telegraph.co.uk", "ft.com", "theguardian.com", "bloomberg.com", "apnews.com", "reuters.com", "rfi.fr", "dw.com", "zh.cn.nikkei.com", "m.cn.nytimes.com", "ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com", "aljazeera.com", "bbc.com"}
-MAINLAND_CHINA_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "qstheory.cn", "news.cn", "gov.cn", "cctv.com"}
-ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "usatoday.com"}
+TAIWAN_WORLD_WHITE_LIST = {"straitstimes.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "economist.com", "telegraph.co.uk", "usatoday.com", "ft.com", "theguardian.com", "washingtonpost.com", "bloomberg.com", "afp.com", "apnews.com", "reuters.com", "ftchinese.com", "rfi.fr", "dw.com", "zh.cn.nikkei.com", "m.cn.nytimes.com", "ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com", "aljazeera.com", "bbc.com", "nytimes.com", "wsj.com", "cnn.com"}
+MAINLAND_CHINA_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "21jingji.com", "caixin.com", "chinanews.com.cn", "qstheory.cn", "news.cn", "gov.cn", "cctv.com", "cntv.cn", "cgtn.com"}
+ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "usatoday.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "telegraph.co.uk", "economist.com"}
 
-# 用於地區隔離的關鍵域名（排除用）
-HK_DOMAINS = ["hk01.com", "on.cc", "stheadline.com", "hket.com", "mingpao.com", "scmp.com", "rthk.hk"]
-TW_DOMAINS = ["ltn.com.tw", "chinatimes.com", "udn.com", "ettoday.net", "setn.com", "tvbs.com.tw"]
+# 強制地區黑名單
+HK_DOMAIN_BLACKLIST = ["hk01.com", "on.cc", "stheadline.com", "hket.com", "mingpao.com", "scmp.com", "rthk.hk", "news.now.com", "dotdotnews.com", "hkej.com", "bastillepost.com"]
+TW_DOMAIN_BLACKLIST = ["ltn.com.tw", "chinatimes.com", "udn.com", "ettoday.net", "setn.com", "tvbs.com.tw"]
 
 # ==================== 2. 工具函數 ====================
+def get_domain(link):
+    try: return urlparse(link).netloc.replace("www.", "").lower()
+    except: return ""
+
+def clean_summary(text):
+    if not text: return ""
+    return re.sub(r'<[^>]+>', ' ', text).replace('&nbsp;', ' ').strip()
+
 def to_hkt_aware(dt_obj):
-    if dt_obj.tzinfo is None:
-        dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+    if dt_obj.tzinfo is None: dt_obj = dt_obj.replace(tzinfo=timezone.utc)
     return dt_obj.astimezone(HKT)
 
-def fetch_google_news(url, label, start_hkt, end_hkt):
+def fetch_google_news(url, label, start_hkt, end_hkt, keywords):
     articles = []
     try:
         feed = feedparser.parse(url, request_headers={'User-Agent': 'Mozilla/5.0'})
@@ -34,108 +42,125 @@ def fetch_google_news(url, label, start_hkt, end_hkt):
                 dt_hkt = to_hkt_aware(dt)
             except: continue
             
-            # 嚴格日期過濾
+            # 日期檢查
             if not (start_hkt <= dt_hkt <= end_hkt): continue
-                
-            raw_title = e.get('title', '')
-            media_name = raw_title.rsplit(" - ", 1)[-1] if " - " in raw_title else "未知"
-            pure_title = raw_title.rsplit(" - ", 1)[0] if " - " in raw_title else raw_title
+            
+            title = e.get('title', '')
+            summary = clean_summary(e.get('summary', ''))
+            full_text = (title + " " + summary).lower()
+            
+            # 【核心改進】AND 邏輯：標題+摘要必須包含所有關鍵字
+            if not all(k.lower() in full_text for k in keywords): continue
 
             articles.append({
-                "pure_title": pure_title,
+                "title": title.rsplit(" - ", 1)[0],
                 "link": e.get('link', ''),
+                "summary": summary,
                 "published_dt": dt_hkt,
-                "pub_time_str": dt_hkt.strftime("%Y-%m-%d %H:%M HKT"),
-                "media_name": media_name,
-                "source_type": label
+                "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"),
+                "source": title.rsplit(" - ", 1)[-1] if " - " in title else "未知",
+                "label": label,
+                "domain": get_domain(e.get('link', ''))
             })
         return articles
     except: return []
 
-# ==================== 3. UI 介面 ====================
-st.set_page_config(page_title="全球新聞搜尋器 V9.0", layout="wide")
-st.title("🌐 全球新聞搜尋器 V9.0")
-st.caption("全面回歸 Google RSS | 修復雙關鍵字 | 強化地區隔離 | 移除 GNews")
+# ==================== 3. Streamlit UI ====================
+st.set_page_config(page_title="全球新聞搜尋器 V9.1", layout="wide")
+st.title("🌐 全球新聞搜尋器 V9.1")
+st.caption("修復日期語法 | 標題+摘要雙重過濾 | 解決白名單遺漏")
 
-region = st.radio("選擇搜尋區域", ["香港媒體", "台灣/世界華文", "英文全球", "中國大陸"], horizontal=True)
-query = st.text_input("輸入關鍵字 (多個關鍵字請用空格分開)", placeholder="例如：李家超 託管")
+region = st.radio("主要搜尋區域", ["香港媒體", "台灣/世界華文", "英文全球", "中國大陸"], horizontal=True)
+query = st.text_input("輸入關鍵字", placeholder="例如：李家超 託管")
 
 col1, col2 = st.columns(2)
 with col1: start_date = st.date_input("開始日期", value=date.today() - timedelta(days=3))
 with col2: end_date = st.date_input("結束日期", value=date.today())
 
-if st.button("開始搜尋", type="primary"):
+if st.button("啟動深度搜尋", type="primary"):
     if not query: st.stop()
-
+    
+    # 預處理
+    kw_list = query.strip().split()
     start_hkt = HKT.localize(datetime.combine(start_date, datetime.min.time()))
+    # 結束日期設為當天 23:59:59
     end_hkt = HKT.localize(datetime.combine(end_date, datetime.max.time()))
-
-    # 區域配置與排除邏輯
-    exclude_query = ""
+    
+    # 區域映射
+    blacklist = []
     if "香港" in region:
         white_list, gl, hl, ceid = HK_WHITE_LIST, "HK", "zh-HK", "HK:zh-Hant"
-        exclude_query = " " + " ".join([f"-site:{d}" for d in TW_DOMAINS])
+        blacklist = TW_DOMAIN_BLACKLIST
     elif "台灣" in region:
         white_list, gl, hl, ceid = TAIWAN_WORLD_WHITE_LIST, "TW", "zh-TW", "TW:zh-Hant"
-        exclude_query = " " + " ".join([f"-site:{d}" for d in HK_DOMAINS])
+        blacklist = HK_DOMAIN_BLACKLIST
     elif "英文" in region:
         white_list, gl, hl, ceid = ENGLISH_GLOBAL_LIST, "US", "en", "US:en"
     else:
         white_list, gl, hl, ceid = MAINLAND_CHINA_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans"
 
-    # 多關鍵字處理：將空格轉為 + 確保 Google News 執行 AND 搜尋
-    processed_query = query.strip().replace(" ", "+")
-
-    with st.spinner("正在執行多重深度搜尋..."):
-        def build_url(q, ex_q, sites=None):
+    with st.spinner("正在執行跨時區數據挖掘..."):
+        # 構建 URL (模仿 Ver 6.3 穩定版)
+        def build_url(q, sites=None):
             site_str = f"+({'+OR+'.join(f'site:{s}' for s in sites)})" if sites else ""
-            # 加入 after 和 before 語法
-            base = f"https://news.google.com/rss/search?q={quote(q)}{site_str}{quote(ex_q)}"
-            date_filter = f"+after:{start_date}+before:{end_date + timedelta(days=1)}"
-            return f"{base}{quote(date_filter)}&hl={hl}&gl={gl}&ceid={ceid}"
+            base = f"https://news.google.com/rss/search?q={quote(q)}{site_str}"
+            # 時間指令絕對不能編碼！
+            time_params = f"+after:{start_date}+before:{end_date + timedelta(days=1)}"
+            return f"{base}{time_params}&hl={hl}&gl={gl}&ceid={ceid}"
 
-        # 1. 白名單 (Core) - 批次抓取
-        all_core = []
-        wl_list = list(white_list)
-        for i in range(0, len(wl_list), 15):
-            url = build_url(processed_query, exclude_query, wl_list[i:i+15])
-            all_core.extend(fetch_google_news(url, "白名單", start_hkt, end_hkt))
+        # 1. 抓取白名單 (分組處理避免 URL 太長)
+        raw_white = []
+        wl_temp = list(white_list)
+        for i in range(0, len(wl_temp), 10):
+            url = build_url(query, wl_temp[i:i+10])
+            raw_white.extend(fetch_google_news(url, "白名單", start_hkt, end_hkt, kw_list))
         
-        # 2. 廣泛補充包 (Supplement)
-        url_supp = build_url(processed_query, exclude_query)
-        all_supp = fetch_google_news(url_supp, "補充包", start_hkt, end_hkt)
+        # 2. 抓取補充包 (不限 Site)
+        raw_supp = fetch_google_news(build_url(query), "補充包", start_hkt, end_hkt, kw_list)
+        
+        # 3. 過濾與混合
+        final_core, final_supp, seen = [], [], set()
+        
+        for a in (raw_white + raw_supp):
+            if a['link'] in seen: continue
+            
+            # A. 隔離黑名單
+            if any(b_domain in a['domain'] for b_domain in blacklist): continue
+            
+            # B. 判斷白名單 (包含子網域判定，修復 NYT 遺漏)
+            is_white = False
+            for w_domain in white_list:
+                if w_domain in a['link'] or w_domain in a['domain']:
+                    is_white = True
+                    break
+            
+            if is_white:
+                final_core.append(a)
+            else:
+                # 補充包數量管理：不超過白名單的兩倍或基礎 20 則
+                if len(final_supp) < max(20, len(final_core) * 2):
+                    final_supp.append(a)
+            
+            seen.add(a['link'])
 
-        # ==================== 清洗與去重 ====================
-        final_results, seen = [], set()
-        
-        # 優先合併白名單
-        for a in all_core:
-            if a['link'] not in seen:
-                final_results.append(a)
-                seen.add(a['link'])
-        
-        # 填充補充包 (最多補到總數的三分一或設定上限)
-        supp_count = 0
-        max_supp = max(40, len(final_results) // 2) # 提高補充包比例
-        for a in all_supp:
-            if a['link'] not in seen and supp_count < max_supp:
-                final_results.append(a)
-                seen.add(a['link'])
-                supp_count += 1
-        
-        # 按時間排序
+        # 4. 排序與顯示
+        final_results = final_core + final_supp
         final_results.sort(key=lambda x: x["published_dt"], reverse=True)
 
-        # ==================== 輸出 ====================
-        st.success(f"搜尋完成：找到 {len(final_results)} 則相關新聞")
+        st.success(f"搜尋完成：核心白名單 {len(final_core)} 則 | 相關補充 {len(final_supp)} 則")
         
-        for news in final_results:
-            icon = "✅" if news['source_type'] == "白名單" else "🌐"
-            st.markdown(f"### {icon} [{news['pure_title']}]({news['link']})")
-            st.caption(f"來源：**{news['media_name']}** | 類別：{news['source_type']} | 時間：{news['pub_time_str']}")
+        for n in final_results:
+            badge = "✅" if n in final_core else "🌐"
+            st.markdown(f"### {badge} [{n['title']}]({n['link']})")
+            st.caption(f"來源：**{n['source']}** | 時間：{n['pub_str']} | 網域：{n['domain']}")
+            with st.expander("查看新聞摘要"):
+                st.write(n['summary'])
             st.divider()
 
-        with st.expander("🔍 搜尋診斷 (V9.0)"):
-            st.write(f"關鍵字處理: `{processed_query}`")
-            st.write(f"白名單總數: {len(all_core)} | 補充包總數: {len(all_supp)}")
-            st.write(f"排除字串: `{exclude_query}`")
+        # 5. 診斷面板 (回歸指標)
+        with st.expander("🔍 Ver 9.1 深度診斷"):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Google 原始總命中", len(raw_white) + len(raw_supp))
+            c2.metric("白名單判定數", len(final_core))
+            c3.metric("被排除雜訊數", (len(raw_white) + len(raw_supp)) - len(final_results))
+            st.info(f"搜尋語法：`{query} after:{start_date} before:{end_date}`")
