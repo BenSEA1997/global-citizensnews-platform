@@ -44,7 +44,7 @@ def fetch_google_news(url, label, start_hkt, end_hkt, keywords):
             
             title = e.get('title', '')
             summary = clean_summary(e.get('summary', ''))
-            # 雖然不顯示摘要，但後端仍用來做 AND 邏輯判定
+            # 後端執行 AND 邏輯判定 (標題+摘要同時比對)
             full_text = (title + " " + summary).lower()
             
             if not all(k.lower() in full_text for k in keywords): continue
@@ -54,7 +54,7 @@ def fetch_google_news(url, label, start_hkt, end_hkt, keywords):
                 "link": e.get('link', ''),
                 "published_dt": dt_hkt,
                 "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"),
-                "source": title.rsplit(" - ", 1)[-1] if " - " in title else "未知",
+                "source": title.rsplit(" - ", 1)[-1] if " - " in title else "未知來源",
                 "label": label,
                 "domain": get_domain(e.get('link', ''))
             })
@@ -99,22 +99,23 @@ if st.button("執行搜尋", type="primary"):
             time_params = f"+after:{start_date}+before:{end_date + timedelta(days=1)}"
             return f"{base}{time_params}&hl={hl}&gl={gl}&ceid={ceid}"
 
-        # 1. 抓取
+        # 1. 分批抓取
         raw_white = []
         wl_temp = list(white_list)
         for i in range(0, len(wl_temp), 10):
-            raw_white.extend(fetch_google_news(build_url(query, wl_temp[i:i+10]), "核心白名單", start_hkt, end_hkt, kw_list))
+            url = build_url(query, wl_temp[i:i+10])
+            raw_white.extend(fetch_google_news(url, "核心白名單", start_hkt, end_hkt, kw_list))
         
         raw_supp = fetch_google_news(build_url(query), "智能補充包", start_hkt, end_hkt, kw_list)
         
-        # 2. 過濾與標籤判定
+        # 2. 邏輯過濾與標籤判定
         final_core, final_supp, seen = [], [], set()
         
         for a in (raw_white + raw_supp):
             if a['link'] in seen: continue
             if any(b_domain in a['domain'] for b_domain in blacklist): continue
             
-            # 重新判定白名單 (修復遺漏邏輯)
+            # 重新判定白名單 (修復 NYT 等遺漏問題)
             is_white = False
             for w_domain in white_list:
                 if w_domain in a['link'] or w_domain in a['domain']:
@@ -130,24 +131,23 @@ if st.button("執行搜尋", type="primary"):
                     final_supp.append(a)
             seen.add(a['link'])
 
-        # 3. 排序
+        # 3. 排序與顯示
         results = final_core + final_supp
         results.sort(key=lambda x: x["published_dt"], reverse=True)
 
         st.success(f"找到 {len(results)} 則新聞 (白名單: {len(final_core)} | 補充: {len(final_supp)})")
         
-        # 4. 顯示結果 (極簡化格式)
         for n in results:
             badge = "✅" if n['label'] == "核心白名單" else "🌐"
             st.markdown(f"### {badge} [{n['title']}]({n['link']})")
-            # 恢復您要求的資訊行，刪除網域與摘要
+            # 格式：來源 | 標籤 | 時間
             st.markdown(f"**來源：**{n['source']} | **標籤：**{n['label']} | **時間：**{n['pub_str']}")
             st.divider()
 
-        # 5. 診斷面板
+        # 4. 診斷面板 (修正語法錯誤)
         with st.expander("🔍 Ver 9.2 深度診斷"):
             c1, c2, c3 = st.columns(3)
             c1.metric("Google 原始命中", len(raw_white) + len(raw_supp))
             c2.metric("最終顯示總數", len(results))
             c3.metric("過濾排除雜訊", (len(raw_white) + len(raw_supp)) - len(results))
-            st.write(f"當
+            st.write(f"當前搜尋關鍵字: {kw_list}")
