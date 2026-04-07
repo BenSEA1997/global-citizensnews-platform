@@ -36,10 +36,8 @@ def fetch_google_news(url, label_fallback, start_hkt, end_hkt, keywords, is_supp
                 dt = datetime.fromtimestamp(mktime(e.published_parsed))
                 dt_hkt = to_hkt_aware(dt)
             except: continue
-            
             if not (start_hkt <= dt_hkt <= end_hkt): continue
             
-            # 提取真實來源
             raw_source = e.get('source', {})
             real_source_url = raw_source.get('href', raw_source.get('url', ''))
             real_domain = get_domain(real_source_url)
@@ -50,10 +48,9 @@ def fetch_google_news(url, label_fallback, start_hkt, end_hkt, keywords, is_supp
             summary = clean_summary(e.get('summary', ''))
             full_content = (clean_title + " " + summary).lower()
 
-            # 關鍵字過濾
-            if is_supp: # 補充包寬鬆 OR 邏輯
+            if is_supp:
                 if not any(k.lower() in full_content for k in keywords): continue
-            else: # 白名單嚴格 AND 邏輯
+            else:
                 if not all(k.lower() in full_content for k in keywords): continue
 
             articles.append({
@@ -69,9 +66,9 @@ def fetch_google_news(url, label_fallback, start_hkt, end_hkt, keywords, is_supp
     except: return []
 
 # ==================== 3. Streamlit UI ====================
-st.set_page_config(page_title="全球新聞搜尋器 V9.8", layout="wide")
-st.title("🌐 全球新聞搜尋器 V9.8")
-st.caption("WiseNews TLD 鎖定架構 | 三層過濾混合策略 | 解決跨區滲透")
+st.set_page_config(page_title="全球新聞搜尋器 V9.9", layout="wide")
+st.title("🌐 全球新聞搜尋器 V9.9")
+st.caption("WiseNews 網域鎖定架構 | 三層混合過濾 | 完整診斷面板")
 
 region = st.radio("搜尋區域", ["香港媒體", "台灣/世界華文", "英文全球", "中國大陸"], horizontal=True)
 query = st.text_input("輸入關鍵字", placeholder="例如：李家超 託管")
@@ -86,7 +83,6 @@ if st.button("執行搜尋", type="primary"):
     start_hkt = HKT.localize(datetime.combine(start_date, datetime.min.time()))
     end_hkt = HKT.localize(datetime.combine(end_date, datetime.max.time()))
     
-    # 地區參數與 TLD 鎖定規則
     tld_target = ""
     if "香港" in region:
         white_list, gl, hl, ceid, tld_target = HK_WHITE_LIST, "HK", "zh-HK", "HK:zh-Hant", ".hk"
@@ -104,42 +100,47 @@ if st.button("執行搜尋", type="primary"):
             time_params = f"+after:{start_date}+before:{end_date + timedelta(days=1)}"
             return f"{base}{time_params}&hl={hl}&gl={gl}&ceid={ceid}"
 
-        # 1. 抓取白名單與補充包
         raw_white = fetch_google_news(build_url(query, list(white_list)), "核心白名單", start_hkt, end_hkt, kw_list, is_supp=False)
         raw_supp = fetch_google_news(build_url(query), "智能補充包", start_hkt, end_hkt, kw_list, is_supp=True)
         
-        # 2. 三層過濾混合邏輯
         final_results, seen = [], set()
+        count_core, count_supp, count_intl = 0, 0, 0
         
         for a in (raw_white + raw_supp):
             if a['title'] in seen: continue
-            
             d = a['real_domain']
             label = ""
             
-            # 第一層：絕對白名單判定 (不管 TLD)
             if any(w_domain in d for w_domain in white_list):
                 label = "✅ 核心白名單"
-            
-            # 第二層：WiseNews 式頂級域名鎖定 (TLD Locking)
+                count_core += 1
             elif tld_target and d.endswith(tld_target):
                 label = "🌐 區域補充包"
-            
-            # 第三層：全球優質媒體放行 (針對 .com 等通用網域)
+                count_supp += 1
             elif any(e_domain in d for e_domain in ENGLISH_GLOBAL_LIST):
                 label = "🌍 國際補充"
+                count_intl += 1
             
-            # 過濾：不符合以上三層的雜訊一律捨棄
             if label:
                 a['final_label'] = label
                 final_results.append(a)
                 seen.add(a['title'])
 
         final_results.sort(key=lambda x: x["published_dt"], reverse=True)
-
         st.success(f"找到 {len(final_results)} 則新聞")
         
         for n in final_results:
             st.markdown(f"### {n['final_label'][0]} [{n['title']}]({n['link']})")
             st.markdown(f"**來源：**{n['source']} | **標籤：**{n['final_label']} | **時間：**{n['pub_str']}")
             st.divider()
+
+        # ==================== 4. 診斷面板 (Ver 9.9 回歸) ====================
+        with st.expander("🔍 Ver 9.9 深度診斷"):
+            raw_total = len(raw_white) + len(raw_supp)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Google 原始命中", raw_total)
+            c2.metric("核心白名單數", count_core)
+            c3.metric("區域補充包數", count_supp)
+            c4.metric("過濾排除雜訊", raw_total - len(final_results))
+            
+            st.info(f"**搜尋策略：** 鎖定 {tld_target if tld_target else '國際網域'} + 核心白名單")
