@@ -111,5 +111,70 @@ if st.button("執行搜尋", type="primary"):
         white_list, gl, hl, ceid = MAINLAND_CHINA_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans"
 
     with st.spinner("啟動深度挖掘引擎 (預計需時 5-10 秒)..."):
-        # URL 構建器 (Ver 9.5 版)
-        def build_url(q, sites=None, chunk_start=None, chunk_end=None
+        # URL 構建器 (Ver 9.5 版) - 已修正語法
+        def build_url(q, sites=None, chunk_start=None, chunk_end=None):
+            site_str = f"+({'+OR+'.join(f'site:{s}' for s in sites)})" if sites else ""
+            base = f"https://news.google.com/rss/search?q={quote_plus(q)}{site_str}"
+            after_d = chunk_start if chunk_start is not None else start_date
+            before_d = (chunk_end if chunk_end is not None else end_date) + timedelta(days=1)
+            time_params = f"+after:{after_d}+before:{before_d}"
+            return f"{base}{time_params}&hl={hl}&gl={gl}&ceid={ceid}"
+
+        # 【Ver 9.5 新增】時間範圍自動拆分（>45 天就拆）
+        date_ranges = [(start_date, end_date)]
+        if (end_date - start_date).days > 45:
+            date_ranges = split_date_ranges(start_date, end_date, max_days=45)
+
+        raw_white = []
+        raw_supp = []
+        
+        for c_start, c_end in date_ranges:
+            # 1. 單次抓取全部白名單
+            white_url = build_url(query, list(white_list), c_start, c_end)
+            raw_white.extend(fetch_google_news(white_url, "核心白名單", start_hkt, end_hkt, kw_list))
+            
+            # 2. 抓取補充包
+            supp_url = build_url(query, None, c_start, c_end)
+            raw_supp.extend(fetch_google_news(supp_url, "智能補充包", start_hkt, end_hkt, kw_list))
+        
+        # 3. 精準網域過濾（Ver 9.5 新增全球輻射過濾）
+        final_core, final_supp, seen = [], [], set()
+        
+        for a in (raw_white + raw_supp):
+            if a['title'] in seen: continue
+            
+            if any(b_domain in a['real_domain'] for b_domain in blacklist): continue
+            
+            is_white = any(w_domain in a['real_domain'] for w_domain in white_list)
+            
+            if is_white:
+                a['label'] = "核心白名單"
+                final_core.append(a)
+            else:
+                # 只保留全球優質輻射來源
+                if any(w_domain in a['real_domain'] for w_domain in ALL_REPUTABLE_DOMAINS):
+                    a['label'] = "智能補充包"
+                    final_supp.append(a)
+                # 其他地區直接排除
+            
+            seen.add(a['title'])
+
+        # 4. 排序與顯示（完全保留 V9.4 原顯示方式）
+        results = final_core + final_supp
+        results.sort(key=lambda x: x["published_dt"], reverse=True)
+
+        st.success(f"找到 {len(results)} 則新聞 (白名單: {len(final_core)} | 補充: {len(final_supp)})")
+        
+        for n in results:
+            badge = "✅" if n['label'] == "核心白名單" else "🌐"
+            st.markdown(f"### {badge} [{n['title']}]({n['link']})")
+            st.markdown(f"**來源：**{n['source']} | **標籤：**{n['label']} | **時間：**{n['pub_str']}")
+            st.divider()
+
+        # 5. 診斷面板（完全保留 V9.4 原樣，只更新版本號）
+        with st.expander("🔍 Ver 9.5 深度診斷"):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Google 原始命中", len(raw_white) + len(raw_supp))
+            c2.metric("最終顯示總數", len(results))
+            c3.metric("過濾排除雜訊", (len(raw_white) + len(raw_supp)) - len(results))
+            st.write(f"當前搜尋關鍵字: {kw_list}")
