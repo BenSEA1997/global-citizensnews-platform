@@ -1,5 +1,6 @@
 streamlit
 feedparser
-requests
-trafilatura
 pytz
+google-generativeai
+atproto
+requests
