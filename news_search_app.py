@@ -17,20 +17,11 @@ GEMINI_API_KEY = "AIzaSyC3BObPwMWoulIw2tVdf-mnuvzH6bDFOSI"
 BSKY_HANDLE = "bennysea97.bsky.social"
 BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 
-# 初始化 Gemini AI (採用最穩定的型號呼叫)
+# 僅進行基礎設定，模型實例化移至下方函數以實現備援機制
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    ai_model = genai.GenerativeModel(
-        model_name='gemini-1.5-flash',
-        safety_settings=[
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-    )
 except Exception as e:
-    st.error(f"AI 初始化失敗: {e}")
+    st.error(f"AI API 配置失敗: {e}")
 
 # 初始化 Session State
 if 'social_results' not in st.session_state:
@@ -116,7 +107,7 @@ def fetch_bluesky(query):
     return results
 
 # ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews 平台 V11.2", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews 平台 V11.3", layout="wide")
 
 with st.sidebar:
     st.title("🛠 控制面板")
@@ -210,11 +201,28 @@ else:
         if curr_data:
             st.subheader("✨ Gemini AI Lab 觀點總結")
             context = "\n".join([f"[{d['platform']}] {d['title']}: {d['summary'][:150]}" for d in curr_data[:15]])
-            try:
-                response = ai_model.generate_content(f"你是一位資深調查記者，請分析以下社群觀點，並以繁體中文總結：1.核心主流意見 2.值得注意的少數派異議 3.整體社群情緒。內容：\n{context}")
-                st.info(response.text)
-            except Exception as e:
-                st.error(f"AI 總結失敗：{str(e)}")
+            
+            # --- AI 多模型自動備援機制 ---
+            models_to_try = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-pro']
+            ai_success = False
+            last_err = ""
+            
+            with st.spinner("AI 正在分析內容..."):
+                for m_name in models_to_try:
+                    try:
+                        temp_model = genai.GenerativeModel(m_name)
+                        prompt = f"你是一位資深調查記者，請分析以下社群觀點，並以繁體中文總結：1.核心主流意見 2.值得注意的少數派異議 3.整體社群情緒。內容：\n{context}"
+                        response = temp_model.generate_content(prompt)
+                        st.info(f"**分析報告 (由 {m_name} 生成):**\n\n{response.text}")
+                        ai_success = True
+                        break # 成功就跳出迴圈
+                    except Exception as e:
+                        last_err = str(e)
+                        continue # 失敗則嘗試下一個模型
+                
+                if not ai_success:
+                    st.error(f"AI 總結失敗，已嘗試多種模型均無法連線。最後錯誤：{last_err}")
+            # ------------------------------
 
             st.divider()
             for item in curr_data:
