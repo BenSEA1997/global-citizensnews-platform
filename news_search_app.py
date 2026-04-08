@@ -21,6 +21,12 @@ BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 genai.configure(api_key=GEMINI_API_KEY)
 ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
+# 初始化 Session State (用於分頁和儲存結果)
+if 'social_results' not in st.session_state:
+    st.session_state.social_results = []
+if 'social_page' not in st.session_state:
+    st.session_state.social_page = 0
+
 # ==================== 1. 傳統新聞 Ver 10.3 核心邏輯 ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "pulsehknews.com", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
@@ -76,14 +82,18 @@ def fetch_google_news(url, start_hkt, end_hkt, keywords, is_supp=False):
 # ==================== 2. 去中心化社交平台抓取邏輯 ====================
 def fetch_matters(query):
     matters_api = "https://server.matters.news/graphql"
-    query_json = {"query": """query { search(input: {key: \"""" + query + """\", type: Article, first: 20}) { edges { node { ... on Article { title shortHash summary author { displayName } appreciationsReceivedTotal createdAt } } } } } """}
+    query_json = {"query": """query { search(input: {key: \"""" + query + """\", type: Article, first: 40}) { edges { node { ... on Article { title shortHash summary author { displayName } appreciationsReceivedTotal createdAt } } } } } """}
     results = []
     try:
         response = requests.post(matters_api, json=query_json, timeout=10)
         data = response.json()['data']['search']['edges']
         for item in data:
             n = item['node']
-            results.append({"title": n['title'], "link": f"https://matters.town/a/{n['shortHash']}", "author": n['author']['displayName'], "likes": n['appreciationsReceivedTotal'], "summary": n['summary'], "published": n['createdAt'][:10], "platform": "Matters"})
+            results.append({
+                "title": n['title'], "link": f"https://matters.town/a/{n['shortHash']}",
+                "author": n['author']['displayName'], "likes": n['appreciationsReceivedTotal'],
+                "summary": n['summary'], "published": n['createdAt'], "platform": "Matters"
+            })
     except: pass
     return results
 
@@ -92,20 +102,28 @@ def fetch_bluesky(query):
     try:
         client = Client()
         client.login(BSKY_HANDLE, BSKY_PASSWORD)
-        response = client.app.bsky.feed.search_posts(params={'q': query, 'limit': 20, 'sort': 'top'})
+        response = client.app.bsky.feed.search_posts(params={'q': query, 'limit': 40, 'sort': 'latest'})
         for post in response.posts:
-            results.append({"title": post.record.text[:50].replace('\n',' ') + "...", "link": f"https://bsky.app/profile/{post.author.handle}/post/{post.uri.split('/')[-1]}", "author": post.author.display_name or post.author.handle, "likes": post.like_count or 0, "summary": post.record.text, "published": post.record.created_at[:10], "platform": "Bluesky"})
+            results.append({
+                "title": post.record.text[:50].replace('\n',' ') + "...", 
+                "link": f"https://bsky.app/profile/{post.author.handle}/post/{post.uri.split('/')[-1]}",
+                "author": post.author.display_name or post.author.handle,
+                "likes": (post.like_count or 0) + (post.repost_count or 0),
+                "summary": post.record.text,
+                "published": post.record.created_at,
+                "platform": "Bluesky"
+            })
     except: pass
     return results
 
 # ==================== 3. 主介面切換與 UI ====================
-st.set_page_config(page_title="全球 CitizensNews 平台 V11.0", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews 平台 V11.1", layout="wide")
 
 with st.sidebar:
     st.title("🛠 控制面板")
     app_mode = st.radio("選擇模式：", ["🔘 傳統新聞 (V10.3)", "🔵 去中心化社交平台觀點 (New)"])
     st.divider()
-    st.caption("Ver 11.0 | 雙引擎驅動")
+    st.caption("Ver 11.1 | 排序與分頁優化版")
 
 # --- 模式 A：傳統新聞搜尋 ---
 if app_mode == "🔘 傳統新聞 (V10.3)":
@@ -157,31 +175,79 @@ if app_mode == "🔘 傳統新聞 (V10.3)":
 # --- 模式 B：去中心化社交平台 ---
 else:
     st.title("🔵 去中心化社交平台觀點挖掘")
-    social_query = st.text_input("輸入社交關鍵字", placeholder="例如：李家超 房屋政策")
+    
+    col_input, col_time = st.columns([3, 1])
+    with col_input:
+        social_query = st.text_input("輸入社交關鍵字", placeholder="例如：房屋政策 評論", key="social_input")
+    with col_time:
+        time_filter = st.selectbox("時間篩選", ["全部", "最近 24 小時", "最近 7 天"])
+
     if st.button("執行觀點挖掘", type="primary"):
         if not social_query: st.stop()
-        with st.spinner("正在抓取 Matters & Bluesky 觀點..."):
-            all_social = fetch_matters(social_query) + fetch_bluesky(social_query)
+        with st.spinner("正在抓取並排序最新討論..."):
+            raw_all = fetch_matters(social_query) + fetch_bluesky(social_query)
+            
+            # 排序：最新優先 (Latest First)
+            # Matters 格式: 2024-04-08T... / Bluesky 格式: 2024-04-08T... 
+            # 兩者均可直接按字串降序排列
+            st.session_state.social_results = sorted(raw_all, key=lambda x: x['published'], reverse=True)
+            st.session_state.social_page = 0 
+
+    if st.session_state.social_results:
+        results = st.session_state.social_results
         
-        if not all_social: st.warning("未找到相關討論。")
-        else:
-            # AI Lab 總結
+        # 執行時間篩選 (前端過濾)
+        now = datetime.now(timezone.utc)
+        if time_filter == "最近 24 小時":
+            results = [r for r in results if (now - datetime.fromisoformat(r['published'].replace('Z', '+00:00'))) < timedelta(days=1)]
+        elif time_filter == "最近 7 天":
+            results = [r for r in results if (now - datetime.fromisoformat(r['published'].replace('Z', '+00:00'))) < timedelta(days=7)]
+
+        # 分頁邏輯
+        items_per_page = 20
+        total_pages = (len(results) - 1) // items_per_page + 1
+        start_idx = st.session_state.social_page * items_per_page
+        end_idx = start_idx + items_per_page
+        current_page_data = results[start_idx:end_idx]
+
+        # AI Lab 總結 (僅針對當前頁面的內容)
+        if current_page_data:
             st.subheader("✨ Gemini AI Lab 觀點總結")
-            context = "\n".join([f"[{d['platform']}] {d['title']}: {d['summary'][:120]}" for d in all_social[:15]])
+            context = "\n".join([f"[{d['platform']}] {d['title']}: {d['summary'][:120]}" for d in current_page_data[:15]])
             try:
                 res = ai_model.generate_content(f"分析以下社群觀點並用繁體中文回覆：1.總結核心意見 2.是否有獨特視角 3.討論情緒。內容：\n{context}")
                 st.info(res.text)
-            except: st.error("AI 服務暫時無法連接。")
+            except Exception as e:
+                st.error(f"AI 服務暫時無法連接 (錯誤訊息: {str(e)})")
 
-            # 列表顯示
             st.divider()
-            for item in all_social:
+            
+            # 顯示列表
+            for item in current_page_data:
                 icon = "✍️" if item['platform'] == "Matters" else "🦋"
                 with st.container():
                     c1, c2 = st.columns([4, 1])
                     with c1:
                         st.markdown(f"### {icon} [{item['title']}]({item['link']})")
-                        st.caption(f"作者: {item['author']} | 平台: {item['platform']} | 日期: {item['published']}")
+                        pub_date = item['published'][:10] + " " + item['published'][11:16]
+                        st.caption(f"作者: {item['author']} | 平台: {item['platform']} | 發布時間: {pub_date}")
                         st.write(item['summary'])
                     with c2: st.metric("❤️ 互動", item['likes'])
                     st.divider()
+
+            # 分頁按鈕
+            p1, p2, p3 = st.columns([1, 2, 1])
+            with p1:
+                if st.session_state.social_page > 0:
+                    if st.button("⬅️ 上一頁"):
+                        st.session_state.social_page -= 1
+                        st.rerun()
+            with p2:
+                st.write(f"第 {st.session_state.social_page + 1} 頁 / 共 {total_pages} 頁 (總數: {len(results)})")
+            with p3:
+                if end_idx < len(results):
+                    if st.button("下一頁 ➡️"):
+                        st.session_state.social_page += 1
+                        st.rerun()
+    elif social_query:
+        st.info("請按下『執行觀點挖掘』開始搜尋。")
