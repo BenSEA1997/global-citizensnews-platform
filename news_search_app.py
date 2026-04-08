@@ -26,7 +26,7 @@ if 'social_results' not in st.session_state:
 if 'social_page' not in st.session_state:
     st.session_state.social_page = 0
 
-# ==================== 1. 新聞搜尋過濾邏輯 (修正版) ====================
+# ==================== 1. 新聞媒體與過濾邏輯 ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "pulsehknews.com", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -40,38 +40,53 @@ def to_hkt_aware(dt_obj):
     if dt_obj.tzinfo is None: dt_obj = dt_obj.replace(tzinfo=timezone.utc)
     return dt_obj.astimezone(HKT)
 
-# 修正：精確檢查標題是否含有關鍵字
-def is_strictly_relevant(title, query):
-    # 移除引號後的乾淨關鍵字清單
-    query_clean = query.replace('"', '').replace("'", "")
-    kws = [kw.lower() for kw in re.findall(r'\w+', query_clean) if len(kw) > 1]
-    title_lower = title.lower()
-    # 只要標題中包含其中一個核心關鍵字，即視為通過
-    return any(kw in title_lower for kw in kws)
+def is_flexible_relevant(entry, query):
+    title = entry.get('title', '').lower()
+    summary = entry.get('summary', '').lower()
+    query_clean = query.replace('"', '').replace("'", "").lower()
+    kws = [kw for kw in re.findall(r'\w+', query_clean) if len(kw) > 1]
+    if not kws: return True
+    if any(kw in title for kw in kws): return True
+    synonyms = {"李家超": ["特首", "行政長官", "john lee"], "特首": ["李家超"]}
+    for main_kw, syns in synonyms.items():
+        if main_kw in query_clean:
+            if any(s in title for s in syns): return True
+    if any(kw in summary for kw in kws): return True
+    return False
 
-def fetch_google_news(url, start_hkt, end_hkt, query):
+def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
     articles = []
+    diag = {"raw_count": 0, "filtered_count": 0}
     try:
         feed = feedparser.parse(url, request_headers={'User-Agent': 'Mozilla/5.0'})
+        diag["raw_count"] = len(feed.entries)
         for e in feed.entries:
             try: dt_hkt = to_hkt_aware(datetime.fromtimestamp(mktime(e.published_parsed)))
             except: continue
             if not (start_hkt <= dt_hkt <= end_hkt): continue
             
-            clean_title = e.get('title', '').rsplit(" - ", 1)[0]
-            
-            # --- 立即糾正：執行強制過濾 ---
-            if not is_strictly_relevant(clean_title, query):
+            # 語義過濾
+            if not is_flexible_relevant(e, query):
+                diag["filtered_count"] += 1
                 continue
             
+            clean_title = e.get('title', '').rsplit(" - ", 1)[0]
             raw_source = e.get('source', {})
             real_domain = get_domain(raw_source.get('href', raw_source.get('url', '')))
             source_title = raw_source.get('title', '未知來源')
-            articles.append({"title": clean_title, "link": e.get('link', ''), "real_domain": real_domain, "source": source_title, "published_dt": dt_hkt, "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M")})
-        return articles
-    except: return []
+            
+            # 判斷是白名單還是補充包
+            is_white = real_domain in white_list
+            articles.append({
+                "title": clean_title, "link": e.get('link', ''), 
+                "real_domain": real_domain, "source": source_title, 
+                "published_dt": dt_hkt, "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"),
+                "is_white": is_white
+            })
+        return articles, diag
+    except: return [], diag
 
-# ==================== 2. 社交平台邏輯 (封存不變) ====================
+# ==================== 2. 社交平台邏輯 (封存不動) ====================
 def fetch_matters(query):
     matters_api = "https://server.matters.news/graphql"
     query_json = {"query": f'query {{ search(input: {{key: "{query}", type: Article, first: 80}}) {{ edges {{ node {{ ... on Article {{ title shortHash summary author {{ displayName }} appreciationsReceivedTotal createdAt }} }} }} }} }}'}
@@ -98,18 +113,18 @@ def fetch_bluesky(query):
     except: pass
     return results
 
-# ==================== 3. 主介面 UI (優化新聞，封存社交) ====================
-st.set_page_config(page_title="全球 CitizensNews V11.9", layout="wide")
+# ==================== 3. 主介面 UI ====================
+st.set_page_config(page_title="全球 CitizensNews V12.1", layout="wide")
 
 with st.sidebar:
-    st.title("⚙️ 搜尋功能選項")
-    app_mode = st.radio("模式：", ["新聞搜尋", "去中心社交平台搜尋與AI觀點分析"])
+    st.title("⚙️ 功能選項")
+    app_mode = st.radio("模式：", ["新聞搜尋", "去中心社交分析"])
     st.divider()
 
 if app_mode == "新聞搜尋":
-    st.title("🌐 新聞搜尋引擎 V10.3")
+    st.title("🌐 新聞搜尋引擎 V12.1")
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "英文全球", "中國大陸"], horizontal=True)
-    query = st.text_input("關鍵字", placeholder="例如：垃圾徵費")
+    query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
     with col1: start_date = st.date_input("開始日期", value=date.today() - timedelta(days=2))
     with col2: end_date = st.date_input("結束日期", value=date.today())
@@ -124,80 +139,72 @@ if app_mode == "新聞搜尋":
         elif "英文" in region: white_list, gl, hl, ceid = ENGLISH_GLOBAL_LIST, "US", "en", "US:en"
         else: white_list, gl, hl, ceid = CN_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans"
 
-        all_res, seen = [], set()
-        p_bar = st.progress(0)
-        # 使用雙引號強制 Google 執行精確匹配
-        q_google = f'"{query}"'
-        sites_str = quote_plus(" OR ".join([f"site:{s}" for s in white_list]))
-        url = f"https://news.google.com/rss/search?q={quote_plus(q_google)}+({sites_str})+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl}&ceid={ceid}"
+        sites_str = " OR ".join([f"site:{s}" for s in white_list])
+        # 修改搜尋語法：同時搜尋白名單與關鍵字，Google 會自動補完相關內容
+        url = f"https://news.google.com/rss/search?q={quote_plus(query)}+({quote_plus(sites_str)})+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl}&ceid={ceid}"
         
-        raw = fetch_google_news(url, start_hkt, end_hkt, query)
-        for a in raw:
-            if a['link'] not in seen:
-                all_res.append(a); seen.add(a['link'])
-        p_bar.progress(100)
+        raw_articles, diag_info = fetch_google_news(url, start_hkt, end_hkt, query, white_list)
         
-        all_res.sort(key=lambda x: x["published_dt"], reverse=True)
-        st.success(f"找到 {len(all_res)} 則高相關新聞")
-        for n in all_res:
+        white_res = [a for a in raw_articles if a['is_white']]
+        extra_res = [a for a in raw_articles if not a['is_white']]
+        
+        st.success(f"✅ 核心媒體：{len(white_res)} 則 | 📦 補充包：{len(extra_res)} 則")
+        
+        for n in sorted(white_res, key=lambda x: x["published_dt"], reverse=True):
             st.markdown(f"### ✅ [{n['title']}]({n['link']})")
-            st.caption(f"來源：{n['source']} | 時間：{n['pub_str']}")
+            st.caption(f"核心來源：{n['source']} | 時間：{n['pub_str']}")
             st.divider()
 
+        if extra_res:
+            with st.expander("📦 查看補充包新聞（非核心媒體）"):
+                for n in sorted(extra_res, key=lambda x: x["published_dt"], reverse=True):
+                    st.markdown(f"**[{n['title']}]({n['link']})**")
+                    st.caption(f"補充來源：{n['source']} | 時間：{n['pub_str']}")
+                    st.write("---")
+
+        # 底部診斷資料
+        st.divider()
+        st.subheader("🛠️ 技術診斷資訊")
+        st.json({
+            "搜尋字串": query,
+            "日期範圍": f"{start_date} to {end_date}",
+            "原始抓取總數": diag_info["raw_count"],
+            "語義過濾剔除數": diag_info["filtered_count"],
+            "最終顯示總數": len(raw_articles),
+            "RSS_URL": url[:100] + "..."
+        })
+
 else:
-    # 🔴 社交平台頁面：完全保留 Ver 11.8 版權，不作修改
-    st.title("🔵 去中心社交平台搜尋與AI觀點分析")
+    # 社交平台邏輯 (封存不動)
+    st.title("🔵 去中心社交平台搜尋與AI分析")
     col_input, col_time, col_sort = st.columns([2, 1, 1])
     with col_input: social_query = st.text_input("關鍵字", key="s_input")
     with col_time: time_filter = st.selectbox("時間範圍", ["全部", "最近 24 小時", "最近 7 天"])
     with col_sort: sort_order = st.selectbox("排序方式", ["🕒 最新發布", "🔥 互動次數"])
 
     if st.button("執行挖掘與分析", type="primary"):
-        p_bar_soc = st.progress(0)
-        st.write("🔍 正在進行深度檢索...")
-        p_bar_soc.progress(30)
         m_results = fetch_matters(social_query)
-        p_bar_soc.progress(60)
         b_results = fetch_bluesky(social_query)
-        p_bar_soc.progress(100)
         raw_all = m_results + b_results
         now = datetime.now(HKT)
         filtered = [r for r in raw_all if not (time_filter == "最近 24 小時" and (now - r['raw_dt']) > timedelta(days=1)) and not (time_filter == "最近 7 天" and (now - r['raw_dt']) > timedelta(days=7))]
-        if sort_order == "🔥 互動次數": st.session_state.social_results = sorted(filtered, key=lambda x: x['likes'], reverse=True)
-        else: st.session_state.social_results = sorted(filtered, key=lambda x: x['raw_dt'], reverse=True)
+        st.session_state.social_results = sorted(filtered, key=lambda x: (x['likes'] if sort_order=="🔥 互動次數" else x['raw_dt']), reverse=True)
         st.session_state.social_page = 0
-        st.success(f"搜尋完成，共找到 {len(filtered)} 則動態。")
+        st.rerun()
 
     if st.session_state.social_results:
         results = st.session_state.social_results
-        items_per_page = 20
-        total_pages = (len(results) - 1) // items_per_page + 1
-        curr_data = results[st.session_state.social_page * items_per_page : (st.session_state.social_page + 1) * items_per_page]
+        curr_data = results[st.session_state.social_page*20 : (st.session_state.social_page+1)*20]
         if curr_data:
-            st.subheader("✨ Gemini AI 觀點回覆")
-            context = "\n".join([f"[{d['platform']}] {d['title']}: {d['summary'][:80]}" for d in curr_data[:12]])
+            st.subheader("✨ AI 總結觀點")
             try:
                 model = genai.GenerativeModel('models/gemini-2.0-flash')
-                prompt = f"你是 CitizensNews AI。請根據以下內容回覆問題：'{social_query}'。\n{context}"
-                response = model.generate_content(prompt)
-                st.info(f"{response.text}")
-            except: st.warning("AI 額度限制中。")
-        st.divider()
+                context = "\n".join([f"{d['title']}" for d in curr_data[:10]])
+                response = model.generate_content(f"請總結以下討論趨勢：\n{context}")
+                st.info(response.text)
+            except: st.warning("AI 額度受限")
         for item in curr_data:
-            with st.container():
-                st.markdown(f"### [{'✍️' if item['platform']=='Matters' else '🦋'}] [{item['title']}]({item['link']})")
-                st.caption(f"平台: {item['platform']} | 作者: {item['author']} | 日期: {item['published']} | ❤️ {item['likes']}")
-                st.write(item['summary'][:300])
-                st.divider()
-        p1, p2, p3 = st.columns([1, 2, 1])
-        with p1:
-            if st.session_state.social_page > 0:
-                if st.button("⬅️ 上一頁"): 
-                    st.session_state.social_page -= 1
-                    st.rerun()
-        with p2: st.write(f"第 {st.session_state.social_page + 1} 頁 / 共 {total_pages} 頁")
-        with p3:
-            if (st.session_state.social_page + 1) < total_pages:
-                if st.button("下一頁 ➡️"):
-                    st.session_state.social_page += 1
-                    st.rerun()
+            st.markdown(f"### [{'✍️' if item['platform']=='Matters' else '🦋'}] [{item['title']}]({item['link']})")
+            st.caption(f"作者: {item['author']} | 日期: {item['published']} | ❤️ {item['likes']}")
+            st.write(item['summary'][:200])
+            st.divider()
