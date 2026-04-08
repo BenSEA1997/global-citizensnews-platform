@@ -26,8 +26,8 @@ if 'social_results' not in st.session_state:
 if 'social_page' not in st.session_state:
     st.session_state.social_page = 0
 
-# ==================== 1. 新聞媒體與過濾邏輯 ====================
-HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "pulsehknews.com", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
+# ==================== 1. 新聞媒體與邏輯 ====================
+HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
 ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "usatoday.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "telegraph.co.uk", "economist.com"}
@@ -49,8 +49,7 @@ def is_flexible_relevant(entry, query):
     if any(kw in title for kw in kws): return True
     synonyms = {"李家超": ["特首", "行政長官", "john lee"], "特首": ["李家超"]}
     for main_kw, syns in synonyms.items():
-        if main_kw in query_clean:
-            if any(s in title for s in syns): return True
+        if main_kw in query_clean and any(s in title for s in syns): return True
     if any(kw in summary for kw in kws): return True
     return False
 
@@ -65,7 +64,7 @@ def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
             except: continue
             if not (start_hkt <= dt_hkt <= end_hkt): continue
             
-            # 語義過濾
+            # 1. 語義過濾 (剔除雜訊)
             if not is_flexible_relevant(e, query):
                 diag["filtered_count"] += 1
                 continue
@@ -75,7 +74,7 @@ def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
             real_domain = get_domain(raw_source.get('href', raw_source.get('url', '')))
             source_title = raw_source.get('title', '未知來源')
             
-            # 判斷是白名單還是補充包
+            # 2. 白名單判定
             is_white = real_domain in white_list
             articles.append({
                 "title": clean_title, "link": e.get('link', ''), 
@@ -86,7 +85,7 @@ def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
         return articles, diag
     except: return [], diag
 
-# ==================== 2. 社交平台邏輯 (封存不動) ====================
+# ==================== 2. 社交平台 (封存不動) ====================
 def fetch_matters(query):
     matters_api = "https://server.matters.news/graphql"
     query_json = {"query": f'query {{ search(input: {{key: "{query}", type: Article, first: 80}}) {{ edges {{ node {{ ... on Article {{ title shortHash summary author {{ displayName }} appreciationsReceivedTotal createdAt }} }} }} }} }}'}
@@ -114,15 +113,14 @@ def fetch_bluesky(query):
     return results
 
 # ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V12.1", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V12.3", layout="wide")
 
 with st.sidebar:
     st.title("⚙️ 功能選項")
     app_mode = st.radio("模式：", ["新聞搜尋", "去中心社交分析"])
-    st.divider()
 
 if app_mode == "新聞搜尋":
-    st.title("🌐 新聞搜尋引擎 V12.1")
+    st.title("🌐 新聞搜尋引擎 V12.3 (穩定版)")
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "英文全球", "中國大陸"], horizontal=True)
     query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
@@ -139,14 +137,22 @@ if app_mode == "新聞搜尋":
         elif "英文" in region: white_list, gl, hl, ceid = ENGLISH_GLOBAL_LIST, "US", "en", "US:en"
         else: white_list, gl, hl, ceid = CN_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans"
 
-        sites_str = " OR ".join([f"site:{s}" for s in white_list])
-        # 修改搜尋語法：同時搜尋白名單與關鍵字，Google 會自動補完相關內容
-        url = f"https://news.google.com/rss/search?q={quote_plus(query)}+({quote_plus(sites_str)})+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl}&ceid={ceid}"
+        # ✨ 回歸 10.1 邏輯：移除網址中的 site: 限制，讓 Google 輸出最完整的原生結果
+        url = f"https://news.google.com/rss/search?q={quote_plus(query)}+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl}&ceid={ceid}"
         
-        raw_articles, diag_info = fetch_google_news(url, start_hkt, end_hkt, query, white_list)
-        
-        white_res = [a for a in raw_articles if a['is_white']]
-        extra_res = [a for a in raw_articles if not a['is_white']]
+        with st.spinner("正在檢索並執行 AI 語義過濾..."):
+            all_articles, diag = fetch_google_news(url, start_hkt, end_hkt, query, white_list)
+
+        # 去重處理
+        seen = set()
+        unique_articles = []
+        for a in all_articles:
+            if a['link'] not in seen:
+                unique_articles.append(a); seen.add(a['link'])
+
+        # Python 端分流
+        white_res = [a for a in unique_articles if a['is_white']]
+        extra_res = [a for a in unique_articles if not a['is_white']]
         
         st.success(f"✅ 核心媒體：{len(white_res)} 則 | 📦 補充包：{len(extra_res)} 則")
         
@@ -160,18 +166,17 @@ if app_mode == "新聞搜尋":
                 for n in sorted(extra_res, key=lambda x: x["published_dt"], reverse=True):
                     st.markdown(f"**[{n['title']}]({n['link']})**")
                     st.caption(f"補充來源：{n['source']} | 時間：{n['pub_str']}")
-                    st.write("---")
+                    st.divider()
 
-        # 底部診斷資料
         st.divider()
         st.subheader("🛠️ 技術診斷資訊")
         st.json({
-            "搜尋字串": query,
-            "日期範圍": f"{start_date} to {end_date}",
-            "原始抓取總數": diag_info["raw_count"],
-            "語義過濾剔除數": diag_info["filtered_count"],
-            "最終顯示總數": len(raw_articles),
-            "RSS_URL": url[:100] + "..."
+            "搜尋關鍵字": query, 
+            "引擎地區": region,
+            "原始抓取總數": diag["raw_count"], 
+            "雜訊剔除數": diag["filtered_count"], 
+            "最終顯示數": len(unique_articles),
+            "API URL": url
         })
 
 else:
@@ -200,9 +205,9 @@ else:
             try:
                 model = genai.GenerativeModel('models/gemini-2.0-flash')
                 context = "\n".join([f"{d['title']}" for d in curr_data[:10]])
-                response = model.generate_content(f"請總結以下討論趨勢：\n{context}")
+                response = model.generate_content(f"請總結討論趨勢：\n{context}")
                 st.info(response.text)
-            except: st.warning("AI 額度受限")
+            except: st.warning("AI 限制")
         for item in curr_data:
             st.markdown(f"### [{'✍️' if item['platform']=='Matters' else '🦋'}] [{item['title']}]({item['link']})")
             st.caption(f"作者: {item['author']} | 日期: {item['published']} | ❤️ {item['likes']}")
