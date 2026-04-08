@@ -17,10 +17,9 @@ GEMINI_API_KEY = "AIzaSyC3BObPwMWoulIw2tVdf-mnuvzH6bDFOSI"
 BSKY_HANDLE = "bennysea97.bsky.social"
 BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 
-# 初始化 Gemini AI (採用最相容寫法)
+# 初始化 Gemini AI (採用最穩定的型號呼叫)
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    # 使用不帶 models/ 前綴的名稱，並加入安全過濾器設定
     ai_model = genai.GenerativeModel(
         model_name='gemini-1.5-flash',
         safety_settings=[
@@ -39,7 +38,7 @@ if 'social_results' not in st.session_state:
 if 'social_page' not in st.session_state:
     st.session_state.social_page = 0
 
-# ==================== 1. 傳統新聞邏輯 (封裝自 V10.3) ====================
+# ==================== 1. 傳統新聞邏輯 (V10.3) ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "pulsehknews.com", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -143,7 +142,7 @@ if app_mode == "🔘 傳統新聞 (V10.3)":
         else: white_list, gl, hl, ceid, is_china = CN_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans", True
 
         date_chunks = split_date_ranges(start_date, end_date)
-        all_raw_white, all_raw_supp = [], []
+        all_raw_white, all_raw_supp = [] , []
         p_bar = st.progress(0)
         for idx, (s_d, e_d) in enumerate(date_chunks):
             q_str = " ".join(kw_list)
@@ -185,7 +184,6 @@ else:
         with st.spinner("正在抓取大數據..."):
             raw_all = fetch_matters(social_query) + fetch_bluesky(social_query)
             
-            # 過濾
             now = datetime.now(timezone.utc)
             filtered = []
             for r in raw_all:
@@ -196,7 +194,6 @@ else:
                     filtered.append(r)
                 except: filtered.append(r)
 
-            # 排序
             if sort_order == "🕒 最新發布":
                 st.session_state.social_results = sorted(filtered, key=lambda x: x['published'], reverse=True)
             else:
@@ -223,12 +220,14 @@ else:
             for item in curr_data:
                 icon = "✍️" if item['platform'] == "Matters" else "🦋"
                 with st.container():
-                    c1, c2 = st.columns([4, 1])
-                    with c1:
+                    c_main, c_stat = st.columns([4, 1])
+                    with c_main:
                         st.markdown(f"### {icon} [{item['title']}]({item['link']})")
-                        st.caption(f"作者: {item['author']} | 平台: {item['platform']} | 時間: {item['published'][:16].replace('T', ' ')}")
+                        pub_date_display = item['published'][:16].replace('T', ' ')
+                        st.caption(f"作者: {item['author']} | 平台: {item['platform']} | 時間: {pub_date_display}")
                         st.write(item['summary'])
-                    with col_sort_dummy := c2: st.metric("❤️ 互動", item['likes'])
+                    with c_stat: 
+                        st.metric("❤️ 互動", item['likes'])
                     st.divider()
 
             p1, p2, p3 = st.columns([1, 2, 1])
