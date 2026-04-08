@@ -9,17 +9,16 @@ import google.generativeai as genai
 import requests
 from atproto import Client
 
-# ==================== 0. 核心配置與 AI 初始化 ====================
+# ==================== 0. 核心配置 ====================
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# 從 Streamlit Secrets 讀取金鑰
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     BSKY_HANDLE = "bennysea97.bsky.social"
     BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
     genai.configure(api_key=GEMINI_API_KEY)
 except Exception as e:
-    st.error("❌ Secrets 設定錯誤：請在 Streamlit Cloud 後台填入 GEMINI_API_KEY。")
+    st.error("❌ Secrets 設定錯誤。")
     st.stop()
 
 if 'social_results' not in st.session_state:
@@ -27,7 +26,7 @@ if 'social_results' not in st.session_state:
 if 'social_page' not in st.session_state:
     st.session_state.social_page = 0
 
-# ==================== 1. 傳統新聞邏輯 (V10.3) ====================
+# ==================== 1. 傳統新聞邏輯 (保持 V10.3) ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "pulsehknews.com", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -55,8 +54,7 @@ def fetch_google_news(url, start_hkt, end_hkt, keywords):
     try:
         feed = feedparser.parse(url, request_headers={'User-Agent': 'Mozilla/5.0'})
         for e in feed.entries:
-            try:
-                dt_hkt = to_hkt_aware(datetime.fromtimestamp(mktime(e.published_parsed)))
+            try: dt_hkt = to_hkt_aware(datetime.fromtimestamp(mktime(e.published_parsed)))
             except: continue
             if not (start_hkt <= dt_hkt <= end_hkt): continue
             raw_source = e.get('source', {})
@@ -67,7 +65,7 @@ def fetch_google_news(url, start_hkt, end_hkt, keywords):
         return articles
     except: return []
 
-# ==================== 2. 去中心化社交平台邏輯 ====================
+# ==================== 2. 社交平台邏輯 ====================
 def fetch_matters(query):
     matters_api = "https://server.matters.news/graphql"
     query_json = {"query": f'query {{ search(input: {{key: "{query}", type: Article, first: 80}}) {{ edges {{ node {{ ... on Article {{ title shortHash summary author {{ displayName }} appreciationsReceivedTotal createdAt }} }} }} }} }}'}
@@ -93,14 +91,13 @@ def fetch_bluesky(query):
     return results
 
 # ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V11.6", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V11.7", layout="wide")
 
 with st.sidebar:
     st.title("🛠 控制面板")
     app_mode = st.radio("選擇模式：", ["🔘 傳統新聞搜尋", "🔵 社交觀點分析"])
     st.divider()
 
-# --- 模式 A：傳統新聞 ---
 if app_mode == "🔘 傳統新聞搜尋":
     st.title("🌐 傳統新聞搜尋引擎 V10.3")
     region = st.radio("搜尋區域", ["香港媒體", "台灣/世界華文", "英文全球", "中國大陸"], horizontal=True)
@@ -122,7 +119,6 @@ if app_mode == "🔘 傳統新聞搜尋":
 
         date_chunks = split_date_ranges(start_date, end_date)
         all_res, seen = [], set()
-        
         p_bar = st.progress(0)
         for idx, (s_d, e_d) in enumerate(date_chunks):
             q_str = quote_plus(" ".join(kw_list))
@@ -134,15 +130,13 @@ if app_mode == "🔘 傳統新聞搜尋":
                     a['final_label'] = "✅ 核心媒體"
                     all_res.append(a); seen.add(a['link'])
             p_bar.progress((idx + 1) / len(date_chunks))
-
         all_res.sort(key=lambda x: x["published_dt"], reverse=True)
         st.success(f"找到 {len(all_res)} 則新聞")
         for n in all_res:
-            st.markdown(f"### {n['final_label'][0]} [{n['title']}]({n['link']})")
+            st.markdown(f"### ✅ [{n['title']}]({n['link']})")
             st.caption(f"來源：{n['source']} | 時間：{n['pub_str']}")
             st.divider()
 
-# --- 模式 B：社交分析 ---
 else:
     st.title("🔵 社交平台觀點挖掘 (Matters / Bluesky)")
     col_input, col_time, col_sort = st.columns([2, 1, 1])
@@ -166,17 +160,17 @@ else:
         results = st.session_state.social_results
         curr_data = results[st.session_state.social_page*20 : (st.session_state.social_page+1)*20]
 
-        # --- AI 總結區塊 (Ver 11.6：根據您的可用清單進行更新) ---
+        # --- AI 總結區塊 (Ver 11.7：額度優化與 Flash 優先) ---
         if curr_data:
             st.subheader("✨ Gemini AI 調查報告")
-            context = "\n".join([f"[{d['platform']}] {d['title']}: {d['summary'][:100]}" for d in curr_data[:15]])
+            # 優化 Token：只取前 10 則最重要的內容，且每則只取 80 字，降低 TPM 壓力
+            context = "\n".join([f"[{d['platform']}] {d['title']}: {d['summary'][:80]}" for d in curr_data[:10]])
             
-            # 使用您清單中確實存在的模型 ID
+            # 模型選擇：優先使用 Flash (額度較高)，避開容易 429 的 Pro 系列
             models_to_try = [
-                'models/gemini-2.0-flash',        # 清單第 2 項，目前最平衡的選擇
-                'models/gemini-flash-latest',     # 清單第 16 項
-                'models/gemini-2.5-flash',        # 清單第 0 項 (最新)
-                'models/gemini-pro-latest'        # 清單第 18 項 (備援)
+                'models/gemini-2.0-flash', 
+                'models/gemini-flash-latest',
+                'models/gemini-2.5-flash-lite'
             ]
             ai_success = False
             last_err = ""
@@ -184,7 +178,8 @@ else:
             for m_name in models_to_try:
                 try:
                     model = genai.GenerativeModel(m_name)
-                    response = model.generate_content(f"你是一位資深調查記者，請用繁體中文分析以下內容並總結核心意見與情緒：\n{context}")
+                    response = model.generate_content(f"請用繁體中文分析以下社群內容並總結核心意見：\n{context}", 
+                                                   generation_config={"max_output_tokens": 500})
                     st.info(f"**分析模型：{m_name.split('/')[-1]}**\n\n{response.text}")
                     ai_success = True
                     break
@@ -193,9 +188,10 @@ else:
                     continue
             
             if not ai_success:
-                st.error(f"AI 總結暫時不可用。最後錯誤：{last_err}")
-                with st.expander("🛠 API 診斷 (已顯示可用清單)"):
-                    st.write("請確認您的 API 金鑰是否有權限存取上述模型。")
+                if "429" in last_err:
+                    st.warning("⚠️ Google API 額度已達上限（每分鐘或每日次數限制）。請等候約 30 秒後再試，或更換關鍵字減少 Token 負擔。")
+                else:
+                    st.error(f"AI 總結暫時不可用。錯誤：{last_err}")
 
         st.divider()
         for item in curr_data:
