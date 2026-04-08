@@ -33,9 +33,6 @@ TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvn
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
 ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "usatoday.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "telegraph.co.uk", "economist.com"}
 
-HK_SUPP_KEYWORDS = ["香港", "HK", "Hong Kong", "港聞", "港"]
-SYNONYM_DICT = {"中山": ["中山陵", "中山紀念館", "中山市", "孫中山"]}
-
 def get_domain(link):
     try: return urlparse(link).netloc.replace("www.", "").lower()
     except: return ""
@@ -96,7 +93,7 @@ def fetch_bluesky(query):
     return results
 
 # ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V11.5", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V11.6", layout="wide")
 
 with st.sidebar:
     st.title("🛠 控制面板")
@@ -107,7 +104,7 @@ with st.sidebar:
 if app_mode == "🔘 傳統新聞搜尋":
     st.title("🌐 傳統新聞搜尋引擎 V10.3")
     region = st.radio("搜尋區域", ["香港媒體", "台灣/世界華文", "英文全球", "中國大陸"], horizontal=True)
-    query = st.text_input("輸入關鍵字", placeholder="例如：鄭麗文 中山")
+    query = st.text_input("輸入關鍵字", placeholder="例如：房屋政策")
     col1, col2 = st.columns(2)
     with col1: start_date = st.date_input("開始日期", value=date.today() - timedelta(days=3))
     with col2: end_date = st.date_input("結束日期", value=date.today())
@@ -118,12 +115,10 @@ if app_mode == "🔘 傳統新聞搜尋":
         start_hkt = HKT.localize(datetime.combine(start_date, datetime.min.time()))
         end_hkt = HKT.localize(datetime.combine(end_date, datetime.max.time()))
         
-        # 區域參數設定
-        tld_target, is_china = "", False
-        if "香港" in region: white_list, gl, hl, ceid, tld_target = HK_WHITE_LIST, "HK", "zh-HK", "HK:zh-Hant", ".hk"
-        elif "台灣" in region: white_list, gl, hl, ceid, tld_target = TW_WHITE_LIST, "TW", "zh-TW", "TW:zh-Hant", ".tw"
-        elif "英文" in region: white_list, gl, hl, ceid, tld_target = ENGLISH_GLOBAL_LIST, "US", "en", "US:en", ".com"
-        else: white_list, gl, hl, ceid, is_china = CN_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans", True
+        if "香港" in region: white_list, gl, hl, ceid = HK_WHITE_LIST, "HK", "zh-HK", "HK:zh-Hant"
+        elif "台灣" in region: white_list, gl, hl, ceid = TW_WHITE_LIST, "TW", "zh-TW", "TW:zh-Hant"
+        elif "英文" in region: white_list, gl, hl, ceid = ENGLISH_GLOBAL_LIST, "US", "en", "US:en"
+        else: white_list, gl, hl, ceid = CN_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans"
 
         date_chunks = split_date_ranges(start_date, end_date)
         all_res, seen = [], set()
@@ -131,7 +126,6 @@ if app_mode == "🔘 傳統新聞搜尋":
         p_bar = st.progress(0)
         for idx, (s_d, e_d) in enumerate(date_chunks):
             q_str = quote_plus(" ".join(kw_list))
-            # 白名單與補充包搜尋
             sites_str = quote_plus(" OR ".join([f"site:{s}" for s in white_list]))
             url = f"https://news.google.com/rss/search?q={q_str}+({sites_str})+after:{s_d}+before:{e_d + timedelta(days=1)}&hl={hl}&gl={gl}&ceid={ceid}"
             raw = fetch_google_news(url, start_hkt, end_hkt, kw_list)
@@ -172,16 +166,17 @@ else:
         results = st.session_state.social_results
         curr_data = results[st.session_state.social_page*20 : (st.session_state.social_page+1)*20]
 
-        # --- AI 總結區塊 (Ver 11.5 404 修復版) ---
+        # --- AI 總結區塊 (Ver 11.6：根據您的可用清單進行更新) ---
         if curr_data:
             st.subheader("✨ Gemini AI 調查報告")
             context = "\n".join([f"[{d['platform']}] {d['title']}: {d['summary'][:100]}" for d in curr_data[:15]])
             
-            # 使用完整模型路徑 ID 以相容 Free Tier
+            # 使用您清單中確實存在的模型 ID
             models_to_try = [
-                'models/gemini-1.5-flash-latest', 
-                'models/gemini-1.5-flash', 
-                'models/gemini-1.5-pro-latest'
+                'models/gemini-2.0-flash',        # 清單第 2 項，目前最平衡的選擇
+                'models/gemini-flash-latest',     # 清單第 16 項
+                'models/gemini-2.5-flash',        # 清單第 0 項 (最新)
+                'models/gemini-pro-latest'        # 清單第 18 項 (備援)
             ]
             ai_success = False
             last_err = ""
@@ -199,9 +194,8 @@ else:
             
             if not ai_success:
                 st.error(f"AI 總結暫時不可用。最後錯誤：{last_err}")
-                with st.expander("🛠 API 診斷"):
-                    try: st.write("可用清單：", [m.name for m in genai.list_models()])
-                    except: st.write("無法連結 API")
+                with st.expander("🛠 API 診斷 (已顯示可用清單)"):
+                    st.write("請確認您的 API 金鑰是否有權限存取上述模型。")
 
         st.divider()
         for item in curr_data:
@@ -215,7 +209,7 @@ else:
                     st.metric("❤️ 互動", item['likes'])
                 st.divider()
 
-        # 分頁翻頁
+        # 分頁控制
         p1, p2, p3 = st.columns([1, 2, 1])
         with p1:
             if st.session_state.social_page > 0:
