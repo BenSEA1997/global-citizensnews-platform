@@ -26,7 +26,7 @@ if 'social_results' not in st.session_state:
 if 'social_page' not in st.session_state:
     st.session_state.social_page = 0
 
-# ==================== 1. 新聞媒體與邏輯 ====================
+# ==================== 1. 新聞媒體與邏輯 (回歸 10.1 核心) ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -64,7 +64,6 @@ def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
             except: continue
             if not (start_hkt <= dt_hkt <= end_hkt): continue
             
-            # 1. 語義過濾 (剔除雜訊)
             if not is_flexible_relevant(e, query):
                 diag["filtered_count"] += 1
                 continue
@@ -73,9 +72,8 @@ def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
             raw_source = e.get('source', {})
             real_domain = get_domain(raw_source.get('href', raw_source.get('url', '')))
             source_title = raw_source.get('title', '未知來源')
-            
-            # 2. 白名單判定
             is_white = real_domain in white_list
+            
             articles.append({
                 "title": clean_title, "link": e.get('link', ''), 
                 "real_domain": real_domain, "source": source_title, 
@@ -112,15 +110,15 @@ def fetch_bluesky(query):
     except: pass
     return results
 
-# ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V12.3", layout="wide")
+# ==================== 3. 主介面 UI (優化顯示方式) ====================
+st.set_page_config(page_title="全球 CitizensNews V12.4", layout="wide")
 
 with st.sidebar:
     st.title("⚙️ 功能選項")
     app_mode = st.radio("模式：", ["新聞搜尋", "去中心社交分析"])
 
 if app_mode == "新聞搜尋":
-    st.title("🌐 新聞搜尋引擎 V12.3 (穩定版)")
+    st.title("🌐 新聞搜尋引擎 V12.4 (穩定版)")
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "英文全球", "中國大陸"], horizontal=True)
     query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
@@ -137,37 +135,30 @@ if app_mode == "新聞搜尋":
         elif "英文" in region: white_list, gl, hl, ceid = ENGLISH_GLOBAL_LIST, "US", "en", "US:en"
         else: white_list, gl, hl, ceid = CN_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans"
 
-        # ✨ 回歸 10.1 邏輯：移除網址中的 site: 限制，讓 Google 輸出最完整的原生結果
         url = f"https://news.google.com/rss/search?q={quote_plus(query)}+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl}&ceid={ceid}"
         
-        with st.spinner("正在檢索並執行 AI 語義過濾..."):
+        with st.spinner("正在進行檢索..."):
             all_articles, diag = fetch_google_news(url, start_hkt, end_hkt, query, white_list)
 
-        # 去重處理
         seen = set()
-        unique_articles = []
-        for a in all_articles:
-            if a['link'] not in seen:
-                unique_articles.append(a); seen.add(a['link'])
+        unique_articles = sorted([a for a in all_articles if a['link'] not in seen and not seen.add(a['link'])], 
+                                key=lambda x: x["published_dt"], reverse=True)
 
-        # Python 端分流
-        white_res = [a for a in unique_articles if a['is_white']]
-        extra_res = [a for a in unique_articles if not a['is_white']]
+        white_count = len([a for a in unique_articles if a['is_white']])
+        extra_count = len(unique_articles) - white_count
         
-        st.success(f"✅ 核心媒體：{len(white_res)} 則 | 📦 補充包：{len(extra_res)} 則")
-        
-        for n in sorted(white_res, key=lambda x: x["published_dt"], reverse=True):
-            st.markdown(f"### ✅ [{n['title']}]({n['link']})")
-            st.caption(f"核心來源：{n['source']} | 時間：{n['pub_str']}")
+        st.success(f"🔍 搜尋完成：核心媒體 {white_count} 則，補充包 {extra_count} 則")
+
+        # ✨ 合併顯示邏輯：根據屬性切換 Icon
+        for n in unique_articles:
+            icon = "✅" if n['is_white'] else "📦"
+            label = "核心來源" if n['is_white'] else "補充來源"
+            
+            st.markdown(f"### {icon} [{n['title']}]({n['link']})")
+            st.caption(f"{label}：{n['source']} | 時間：{n['pub_str']}")
             st.divider()
 
-        if extra_res:
-            with st.expander("📦 查看補充包新聞（非核心媒體）"):
-                for n in sorted(extra_res, key=lambda x: x["published_dt"], reverse=True):
-                    st.markdown(f"**[{n['title']}]({n['link']})**")
-                    st.caption(f"補充來源：{n['source']} | 時間：{n['pub_str']}")
-                    st.divider()
-
+        # 完整保留診斷資料
         st.divider()
         st.subheader("🛠️ 技術診斷資訊")
         st.json({
