@@ -13,7 +13,7 @@ from atproto import Client
 # ==================== 0. 核心配置 (雙重保險與解耦) ====================
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# 自動偵測可能的 Key 名稱 (解決 Secrets 命名衝突問題)
+# 自動偵測可能的 Key 名稱
 def get_gemini_key():
     for key_name in ["GEMINI_API_KEY", "GOOGLE_API_KEY"]:
         if key_name in st.secrets:
@@ -32,7 +32,6 @@ else:
     st.error("❌ 找不到 API Key。請確保 Secrets 中有 GEMINI_API_KEY 或 GOOGLE_API_KEY")
     st.stop()
 
-# 獨立設定 Bluesky (不放在 try 區塊內，避免連線失敗導致整個 App 報 Secrets 錯誤)
 BSKY_HANDLE = "bennysea97.bsky.social"
 BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 
@@ -41,7 +40,7 @@ if 'social_results' not in st.session_state:
 if 'social_page' not in st.session_state:
     st.session_state.social_page = 0
 
-# ==================== 1. 新聞媒體與邏輯 ====================
+# ==================== 1. 工具函數 ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -62,10 +61,6 @@ def is_flexible_relevant(entry, query):
     kws = [kw for kw in re.findall(r'\w+', query_clean) if len(kw) > 1]
     if not kws: return True
     if any(kw in title for kw in kws): return True
-    synonyms = {"李家超": ["特首", "行政長官", "john lee"], "特首": ["李家超"]}
-    for main_kw, syns in synonyms.items():
-        if main_kw in query_clean and any(s in title for s in syns): return True
-    if any(kw in summary for kw in kws): return True
     return False
 
 def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
@@ -78,27 +73,22 @@ def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
             try: dt_hkt = to_hkt_aware(datetime.fromtimestamp(mktime(e.published_parsed)))
             except: continue
             if not (start_hkt <= dt_hkt <= end_hkt): continue
-            
             if not is_flexible_relevant(e, query):
                 diag["filtered_count"] += 1
                 continue
-            
             clean_title = e.get('title', '').rsplit(" - ", 1)[0]
             raw_source = e.get('source', {})
             real_domain = get_domain(raw_source.get('href', raw_source.get('url', '')))
             source_title = raw_source.get('title', '未知來源')
-            is_white = real_domain in white_list
-            
             articles.append({
                 "title": clean_title, "link": e.get('link', ''), 
                 "real_domain": real_domain, "source": source_title, 
                 "published_dt": dt_hkt, "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"),
-                "is_white": is_white
+                "is_white": real_domain in white_list
             })
         return articles, diag
     except: return [], diag
 
-# ==================== 2. 社交平台 ====================
 def fetch_matters(query):
     matters_api = "https://server.matters.news/graphql"
     query_json = {"query": f'query {{ search(input: {{key: "{query}", type: Article, first: 80}}) {{ edges {{ node {{ ... on Article {{ title shortHash summary author {{ displayName }} appreciationsReceivedTotal createdAt }} }} }} }} }}'}
@@ -123,7 +113,7 @@ def fetch_bluesky(query):
             dt = datetime.fromisoformat(post.record.created_at.replace('Z', '+00:00')).astimezone(HKT)
             results.append({"title": post.record.text[:60].replace('\n',' ') + "...", "link": f"https://bsky.app/profile/{post.author.handle}/post/{post.uri.split('/')[-1]}", "author": post.author.display_name or post.author.handle, "likes": (post.like_count or 0) + (post.repost_count or 0), "summary": post.record.text, "published": dt.strftime("%Y-%m-%d %H:%M"), "platform": "Bluesky", "raw_dt": dt})
     except Exception as e:
-        st.sidebar.warning(f"⚠️ Bluesky 暫時無法連線，跳過抓取。原因: {str(e)}")
+        st.sidebar.warning(f"⚠️ Bluesky 暫時無法連線。")
     return results
 
 # ==================== 3. 主介面 UI ====================
@@ -152,37 +142,17 @@ if app_mode == "新聞搜尋":
         else: white_list, gl, hl, ceid = CN_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans"
 
         url = f"https://news.google.com/rss/search?q={quote_plus(query)}+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl}&ceid={ceid}"
-        
         with st.spinner("正在進行檢索..."):
             all_articles, diag = fetch_google_news(url, start_hkt, end_hkt, query, white_list)
-
         seen = set()
-        unique_articles = sorted([a for a in all_articles if a['link'] not in seen and not seen.add(a['link'])], 
-                                key=lambda x: x["published_dt"], reverse=True)
-
-        white_count = len([a for a in unique_articles if a['is_white']])
-        extra_count = len(unique_articles) - white_count
+        unique_articles = sorted([a for a in all_articles if a['link'] not in seen and not seen.add(a['link'])], key=lambda x: x["published_dt"], reverse=True)
         
-        st.success(f"🔍 搜尋完成：核心媒體 {white_count} 則，補充包 {extra_count} 則")
-
+        st.success(f"🔍 搜尋完成，共 {len(unique_articles)} 則新聞")
         for n in unique_articles:
             icon = "✅" if n['is_white'] else "📦"
-            label = "核心來源" if n['is_white'] else "補充來源"
-            
             st.markdown(f"### {icon} [{n['title']}]({n['link']})")
-            st.caption(f"{label}：{n['source']} | 時間：{n['pub_str']}")
+            st.caption(f"來源：{n['source']} | 時間：{n['pub_str']}")
             st.divider()
-
-        st.divider()
-        st.subheader("🛠️ 技術診斷資訊")
-        st.json({
-            "搜尋關鍵字": query, 
-            "引擎地區": region,
-            "原始抓取總數": diag["raw_count"], 
-            "雜訊剔除數": diag["filtered_count"], 
-            "最終顯示數": len(unique_articles),
-            "API URL": url
-        })
 
 else:
     st.title("🔵 去中心社交平台搜尋與AI分析")
@@ -207,8 +177,9 @@ else:
         if curr_data:
             st.subheader("✨ AI 總結觀點")
             try:
-                # 使用穩定性最高的 gemini-1.5-flash
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                # 🛠️ 核心修復：使用 models/ 前綴以相容不同 API 版本
+                model_name = 'models/gemini-1.5-flash'
+                model = genai.GenerativeModel(model_name)
                 
                 safety_settings = {
                     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
@@ -219,15 +190,21 @@ else:
                 
                 context = "\n".join([f"{d['title']}" for d in curr_data[:10]])
                 response = model.generate_content(
-                    f"請分析討論趨勢：\n{context}",
+                    f"請分析以下討論趨勢並給予簡短總結：\n{context}",
                     safety_settings=safety_settings
                 )
                 st.info(response.text)
             except Exception as ai_err: 
-                st.warning(f"⚠️ AI 服務目前無法回應：{str(ai_err)}")
+                # 如果 models/ 前綴還是失敗，嘗試最後一次不帶前綴
+                try:
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    response = model.generate_content(f"分析：\n{context}", safety_settings=safety_settings)
+                    st.info(response.text)
+                except:
+                    st.warning(f"⚠️ AI 模型目前在您的區域或 API 版本中不可用。錯誤：{str(ai_err)}")
 
         for item in curr_data:
             st.markdown(f"### [{'✍️' if item['platform']=='Matters' else '🦋'}] [{item['title']}]({item['link']})")
-            st.caption(f"作者: {item['author']} | 日期: {item['published']} | ❤️ {item['likes']}")
+            st.caption(f"作者: {item['author']} | ❤️ {item['likes']} | {item['published']}")
             st.write(item['summary'][:200])
             st.divider()
