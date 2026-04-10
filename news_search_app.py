@@ -20,17 +20,12 @@ serper_key = get_secret("SERPER_API_KEY")
 
 # ==================== 1. 白名單與域名處理 ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk", "greenbean.media"}
-# 媒體名稱白名單（用於處理 RSS 混淆連結）
 NAME_WHITE_LIST = {"香港電台", "RTHK", "明報", "星島日報", "東網", "on.cc", "HK01", "香港01", "綠豆", "Green Bean", "Now 新聞", "有線新聞", "南華早報", "SCMP", "信報"}
 
 def is_white_list(url, source_name):
-    # 1. 檢查域名
     domain = urlparse(url).netloc.lower()
-    if any(white in domain for white in HK_WHITE_LIST):
-        return True
-    # 2. 檢查媒體名稱 (防止 Google RSS 連結混淆)
-    if any(name.lower() in source_name.lower() for name in NAME_WHITE_LIST):
-        return True
+    if any(white in domain for white in HK_WHITE_LIST): return True
+    if any(name.lower() in str(source_name).lower() for name in NAME_WHITE_LIST): return True
     return False
 
 # ==================== 2. 數據抓取引擎 ====================
@@ -48,7 +43,7 @@ def fetch_rss_news(url, start_hkt, end_hkt):
                 "link": e.get('link', ''),
                 "source": e.get('source', {}).get('title', 'Google News'),
                 "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"),
-                "raw_origin": "rss" # 標記來源於 RSS
+                "raw_origin": "rss"
             })
     except: pass
     return articles
@@ -59,7 +54,7 @@ def fetch_serper_data(query, start_date, end_date, gl, hl):
     headers = {'X-API-KEY': serper_key, 'Content-Type': 'application/json'}
     search_q = f"{query} after:{start_date} before:{end_date + timedelta(days=1)}"
     
-    # A. Serper News API (8頁)
+    # Serper News (8頁)
     for page in range(1, 9):
         try:
             res = requests.post("https://google.serper.dev/news", headers=headers, 
@@ -67,89 +62,91 @@ def fetch_serper_data(query, start_date, end_date, gl, hl):
             items = res.get('news', [])
             if not items: break
             for i in items:
-                results.append({
-                    "title": i.get('title', ''), "link": i.get('link', ''),
-                    "source": i.get('source', 'Serper News'), "pub_str": i.get('date', '近期'),
-                    "raw_origin": "serper_news"
-                })
+                results.append({"title": i.get('title', ''), "link": i.get('link', ''), "source": i.get('source', 'Serper News'), "pub_str": i.get('date', '近期'), "raw_origin": "serper_news"})
         except: break
 
-    # B. Google Organic Search (補充包)
+    # Google 補充包
     try:
         res = requests.post("https://google.serper.dev/search", headers=headers, 
                             data=json.dumps({"q": search_q, "gl": gl, "hl": hl}), timeout=10).json()
         for i in res.get('organic', []):
-            results.append({
-                "title": i.get('title', ''), "link": i.get('link', ''),
-                "source": "Google 補充包", "pub_str": "網頁索引",
-                "raw_origin": "google_organic"
-            })
+            results.append({"title": i.get('title', ''), "link": i.get('link', ''), "source": "Google 補充包", "pub_str": "網頁索引", "raw_origin": "google_organic"})
     except: pass
     return results
 
 # ==================== 3. 主程式 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V13.5", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V13.6", layout="wide")
 
-# 初始化 State
+# 初始化 State (增加健壯性)
 if 'news_results' not in st.session_state: st.session_state.news_results = []
 if 'diag_data' not in st.session_state: st.session_state.diag_data = {"white": 0, "serper": 0, "extra": 0}
+if 'last_news_params' not in st.session_state: st.session_state.last_news_params = None
 
-st.title("🌐 新聞搜尋深度挖掘引擎 V13.5")
-region = st.radio("區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
+st.title("🌐 新聞搜尋深度挖掘引擎 V13.6")
+
+with st.sidebar:
+    st.markdown("### ⚙️ 設定")
+    region = st.radio("區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=False)
+
 query = st.text_input("關鍵字", placeholder="例如：李家超")
-
 col1, col2 = st.columns(2)
 with col1: start_date = st.date_input("開始", value=date.today() - timedelta(days=2))
 with col2: end_date = st.date_input("結束", value=date.today())
 
+news_params = (query, region, start_date, end_date)
+
 if st.button("執行新聞挖掘", type="primary"):
     with st.status("正在挖掘資料中 ...", expanded=True) as status:
-        if not query: st.stop()
+        if not query: st.warning("請輸入關鍵字"); st.stop()
+        
+        # 強制清空舊數據，防止結構衝突
+        st.session_state.news_results = []
+        
         mapping = {"香港媒體": ("hk", "zh-hk", "HK:zh-Hant"), "台灣/世界華文": ("tw", "zh-tw", "TW:zh-Hant"), "環球英文媒體": ("us", "en", "US:en"), "中國大陸": ("cn", "zh-cn", "CN:zh-Hans")}
         gl, hl, ceid = mapping[region]
         
-        # 1. 抓取所有來源
         rss_data = fetch_rss_news(f"https://news.google.com/rss/search?q={quote_plus(query)}&hl={hl}&gl={gl.upper()}&ceid={ceid}", 
                                   HKT.localize(datetime.combine(start_date, datetime.min.time())), 
                                   HKT.localize(datetime.combine(end_date, datetime.max.time())))
         serper_data = fetch_serper_data(query, start_date, end_date, gl, hl)
         
-        # 2. 核心去重與身份判定
         all_raw = rss_data + serper_data
         unique_news = {}
         diag = {"white": 0, "serper": 0, "extra": 0}
         
         for item in all_raw:
             url = item['link']
-            # 身份判定邏輯
+            # 重新判斷身份
             if is_white_list(url, item['source']):
                 final_type = "white"
-            elif item['raw_origin'] == "google_organic":
+            elif item.get('raw_origin') == "google_organic":
                 final_type = "extra"
             else:
                 final_type = "serper"
             
-            # 如果 URL 已存在，白名單身份可覆蓋其他身份
-            if url not in unique_news or (final_type == "white" and unique_news[url]['type'] != "white"):
-                # 如果是覆蓋，先扣除舊類型的計數
-                if url in unique_news:
-                    diag[unique_news[url]['type']] -= 1
-                
+            if url not in unique_news or (final_type == "white" and unique_news[url].get('type') != "white"):
                 unique_news[url] = {**item, "type": final_type}
-                diag[final_type] += 1
+
+        # 二次計算統計數據，確保準確
+        for info in unique_news.values():
+            diag[info['type']] += 1
         
-        st.session_state.news_results = sorted(unique_news.values(), key=lambda x: (x["type"] != "white", x["type"] == "extra"))
+        st.session_state.news_results = sorted(unique_news.values(), key=lambda x: (x.get("type") != "white", x.get("type") == "extra"))
         st.session_state.diag_data = diag
+        st.session_state.last_news_params = news_params
         status.update(label="✅ 挖掘完成！", state="complete")
         st.rerun()
 
-# --- 顯示結果 ---
-if st.session_state.news_results:
+# --- 顯示結果 (Bug 修復重點) ---
+if st.session_state.news_results and st.session_state.last_news_params == news_params:
     d = st.session_state.diag_data
-    st.success(f"📊 **診斷數據測試**｜ ✅ 白名單：{d['white']} 則 ｜ 🔹 Serper：{d['serper']} 則 ｜ 🌍 補充包：{d['extra']} 則 ｜ 📈 總數：{sum(d.values())} 則")
+    st.success(f"📊 **診斷數據測試**｜ ✅ 白名單：{d.get('white', 0)} 則 ｜ 🔹 Serper：{d.get('serper', 0)} 則 ｜ 🌍 補充包：{d.get('extra', 0)} 則 ｜ 📈 總數：{len(st.session_state.news_results)} 則")
 
     for n in st.session_state.news_results:
-        icon = "✅" if n['type'] == "white" else ("🔹" if n['type'] == "serper" else "🌍")
-        st.markdown(f"### {icon} [{n['title']}]({n['link']})")
-        st.caption(f"{n['source']} | {n['pub_str']}")
+        # 使用 .get() 確保即使 key 消失也不會當機
+        n_type = n.get('type', 'extra') 
+        icon = "✅" if n_type == "white" else ("🔹" if n_type == "serper" else "🌍")
+        
+        st.markdown(f"### {icon} [{n.get('title', '無標題')}]({n.get('link', '#')})")
+        st.caption(f"{n.get('source', '未知來源')} | {n.get('pub_str', '未知時間')}")
         st.divider()
