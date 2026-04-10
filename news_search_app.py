@@ -8,6 +8,8 @@ from urllib.parse import urlparse, quote_plus
 import google.generativeai as genai
 import requests
 from atproto import Client
+# 【AI 修正 1】加入安全設定類別引用
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # ==================== 0. 核心配置 ====================
 HKT = pytz.timezone('Asia/Hong_Kong')
@@ -149,7 +151,6 @@ if app_mode == "新聞搜尋":
         
         st.success(f"🔍 搜尋完成：核心媒體 {white_count} 則，補充包 {extra_count} 則")
 
-        # ✨ 合併顯示邏輯：根據屬性切換 Icon
         for n in unique_articles:
             icon = "✅" if n['is_white'] else "📦"
             label = "核心來源" if n['is_white'] else "補充來源"
@@ -158,7 +159,6 @@ if app_mode == "新聞搜尋":
             st.caption(f"{label}：{n['source']} | 時間：{n['pub_str']}")
             st.divider()
 
-        # 完整保留診斷資料
         st.divider()
         st.subheader("🛠️ 技術診斷資訊")
         st.json({
@@ -171,7 +171,6 @@ if app_mode == "新聞搜尋":
         })
 
 else:
-    # 社交平台邏輯 (封存不動)
     st.title("🔵 去中心社交平台搜尋與AI分析")
     col_input, col_time, col_sort = st.columns([2, 1, 1])
     with col_input: social_query = st.text_input("關鍵字", key="s_input")
@@ -194,11 +193,28 @@ else:
         if curr_data:
             st.subheader("✨ AI 總結觀點")
             try:
-                model = genai.GenerativeModel('models/gemini-2.0-flash')
+                # 【AI 修正 2】強制解除安全限制 (BLOCK_NONE)
+                # 維持你習慣的 gemini-1.5-pro 增加穩定度 (或改回 models/gemini-2.0-flash)
+                model = genai.GenerativeModel('gemini-1.5-pro')
+                
+                safety_settings = {
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+                
                 context = "\n".join([f"{d['title']}" for d in curr_data[:10]])
-                response = model.generate_content(f"請總結討論趨勢：\n{context}")
+                # 傳入安全設定
+                response = model.generate_content(
+                    f"請分析討論趨勢：\n{context}",
+                    safety_settings=safety_settings
+                )
                 st.info(response.text)
-            except: st.warning("AI 限制")
+            except Exception as ai_err: 
+                # 這裡顯示具體錯誤，不再只顯示「AI 限制」
+                st.warning(f"AI 目前受限：{str(ai_err)}")
+
         for item in curr_data:
             st.markdown(f"### [{'✍️' if item['platform']=='Matters' else '🦋'}] [{item['title']}]({item['link']})")
             st.caption(f"作者: {item['author']} | 日期: {item['published']} | ❤️ {item['likes']}")
