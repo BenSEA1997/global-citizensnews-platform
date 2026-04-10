@@ -195,7 +195,7 @@ else:
             try:
                 # 【AI 修正 2】強制解除安全限制 (BLOCK_NONE)
                 # 維持你習慣的 gemini-1.5-pro 增加穩定度 (或改回 models/gemini-2.0-flash)
-                model = genai.GenerativeModel('gemini-1.5-pro')
+                model = genai.GenerativeModel('gemini-1.5-flash')
                 
                 safety_settings = {
                     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
