@@ -32,15 +32,13 @@ if api_key:
 BSKY_HANDLE = "bennysea97.bsky.social"
 BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 
-# 初始化所有 Session State
-state_keys = {
-    'news_results': [], 'news_page': 0, 'news_query': "",
-    'social_results': [], 'social_page': 0, 'social_query': ""
-}
-for key, val in state_keys.items():
-    if key not in st.session_state: st.session_state[key] = val
+# 初始化 Session State
+if 'news_results' not in st.session_state: st.session_state.news_results = []
+if 'news_page' not in st.session_state: st.session_state.news_page = 0
+if 'social_results' not in st.session_state: st.session_state.social_results = []
+if 'social_page' not in st.session_state: st.session_state.social_page = 0
 
-# ==================== 1. 新聞邏輯與白名單 ====================
+# ==================== 1. 新聞邏輯 ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -55,11 +53,11 @@ def to_hkt_aware(dt_obj):
     return dt_obj.astimezone(HKT)
 
 def is_flexible_relevant(entry, query):
-    title, summary = entry.get('title', '').lower(), entry.get('summary', '').lower()
+    title = entry.get('title', '').lower()
+    summary = entry.get('summary', '').lower()
     kws = [kw for kw in re.findall(r'\w+', query.lower()) if len(kw) > 1]
     if not kws: return True
-    if any(kw in title for kw in kws): return True
-    return any(kw in summary for kw in kws)
+    return any(kw in title for kw in kws) or any(kw in summary for kw in kws)
 
 def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
     articles = []
@@ -104,130 +102,95 @@ def fetch_bluesky(query):
     except: pass
     return results
 
-# ==================== 3. 主介面 UI (V12.5) ====================
-st.set_page_config(page_title="全球 CitizensNews V12.5", layout="wide")
+# ==================== 3. 主介面 UI (V12.6) ====================
+st.set_page_config(page_title="全球 CitizensNews V12.6", layout="wide")
 
-# --- 側邊欄 (Item 3, 4, 5 方案A) ---
 with st.sidebar:
     st.markdown("### 🌐 功能選單")
     st.info("**去中心化社交平台 Matters, Bluesky搜尋與分析**\n\n內容來自各地專業人士、記者、研究員等深度評論和觀點。")
-    app_mode = st.radio("請選擇模式：", 
-                        ["新聞搜尋模式", "去中心化社交平台 Matters, Bluesky搜尋與分析"])
+    app_mode = st.radio("請選擇模式：", ["新聞搜尋模式", "去中心化社交平台 Matters, Bluesky搜尋與分析"])
     st.divider()
 
-if app_mode == "新聞搜尋模式":
-    # --- 新聞搜尋 UI (Item 1, 2) ---
+if "新聞搜尋" in app_mode:
     st.title("🌐 新聞搜尋引擎 V12.4")
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
     query = st.text_input("請輸入新聞關鍵字", placeholder="例如：聯合國")
-    
     col1, col2 = st.columns(2)
     with col1: start_date = st.date_input("開始日期", value=date.today() - timedelta(days=2))
     with col2: end_date = st.date_input("結束日期", value=date.today())
 
     if st.button("執行新聞搜尋", type="primary"):
-        # Item 9: Running Bar
-        with st.status("🔍 正在跨國檢索新聞庫...", expanded=True) as status:
-            if not query: st.error("請輸入關鍵字"); st.stop()
+        with st.status("🔍 正在檢索新聞庫...", expanded=True) as status:
+            if not query: st.stop()
             start_hkt = HKT.localize(datetime.combine(start_date, datetime.min.time()))
             end_hkt = HKT.localize(datetime.combine(end_date, datetime.max.time()))
-            
-            mapping = {
-                "香港媒體": (HK_WHITE_LIST, "HK", "zh-HK", "HK:zh-Hant"),
-                "台灣/世界華文": (TW_WHITE_LIST, "TW", "zh-TW", "TW:zh-Hant"),
-                "環球英文媒體": (ENGLISH_GLOBAL_LIST, "US", "en", "US:en"),
-                "中國大陸": (CN_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans")
-            }
+            mapping = {"香港媒體": (HK_WHITE_LIST, "HK", "zh-HK", "HK:zh-Hant"), "台灣/世界華文": (TW_WHITE_LIST, "TW", "zh-TW", "TW:zh-Hant"), "環球英文媒體": (ENGLISH_GLOBAL_LIST, "US", "en", "US:en"), "中國大陸": (CN_WHITE_LIST, "CN", "zh-CN", "CN:zh-Hans")}
             white_list, gl, hl, ceid = mapping[region]
             url = f"https://news.google.com/rss/search?q={quote_plus(query)}+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl}&ceid={ceid}"
-            
             articles = fetch_google_news(url, start_hkt, end_hkt, query, white_list)
             seen = set()
             st.session_state.news_results = sorted([a for a in articles if a['link'] not in seen and not seen.add(a['link'])], key=lambda x: x["is_white"], reverse=True)
             st.session_state.news_page = 0
             status.update(label="✅ 搜尋完成！", state="complete")
+            st.rerun()
 
-    # --- 顯示新聞結果 (Item 6, 7, 8) ---
     if st.session_state.news_results:
         res = st.session_state.news_results
         core_count = len([a for a in res if a['is_white']])
-        supp_count = len(res) - core_count
-        
-        # Item 6: 核心與補充媒體框
-        st.success(f"📊 搜尋統計：核心媒體 **{core_count}** 則 | 補充媒體 **{supp_count}** 則")
-        
-        # 分頁處理
+        st.success(f"📊 搜尋統計：核心媒體 **{core_count}** 則 | 補充媒體 **{len(res)-core_count}** 則")
         total_pages = (len(res) - 1) // 30 + 1
-        start_idx = st.session_state.news_page * 30
-        curr_page_data = res[start_idx : start_idx + 30]
-
+        curr_page_data = res[st.session_state.news_page*30 : (st.session_state.news_page+1)*30]
         for n in curr_page_data:
-            # Item 7: 補充媒體用地球 icon
             icon = "✅" if n['is_white'] else "🌐"
             st.markdown(f"### {icon} [{n['title']}]({n['link']})")
             st.caption(f"{n['source']} | {n['pub_str']}")
             st.divider()
-
-        # Item 8: 底部頁數與總數
-        st.write(f"第 {st.session_state.news_page + 1} / {total_pages} 頁 (共 {len(res)} 則結果)")
+        st.write(f"第 {st.session_state.news_page + 1} / {total_pages} 頁 (共 {len(res)} 則)")
         c1, c2, _ = st.columns([1, 1, 4])
-        if st.session_state.news_page > 0:
-            if c1.button("⬅️ 上一頁"): 
-                st.session_state.news_page -= 1; st.rerun()
-        if st.session_state.news_page < total_pages - 1:
-            if c2.button("下一頁 ➡️"): 
-                st.session_state.news_page += 1; st.rerun()
+        if st.session_state.news_page > 0 and c1.button("⬅️ 上一頁"): st.session_state.news_page -= 1; st.rerun()
+        if st.session_state.news_page < total_pages - 1 and c2.button("下一頁 ➡️"): st.session_state.news_page += 1; st.rerun()
 
 else:
-    # --- 社交分析 UI ---
     st.title("🔵 社交平台深度搜尋與分析")
     col_i, col_t, col_s = st.columns([2, 1, 1])
-    with col_i: s_query = st.text_input("搜尋 Matters 與 Bluesky 關鍵字", key="s_input")
+    with col_i: s_query = st.text_input("搜尋關鍵字", key="s_input")
     with col_t: t_filter = st.selectbox("時間範圍", ["全部", "最近 24 小時", "最近 7 天"])
     with col_s: s_order = st.selectbox("排序方式", ["🕒 最新發布", "🔥 互動次數"])
 
     if st.button("執行挖掘與 AI 分析", type="primary"):
-        # Item 9: Running Bar
         with st.status("📡 正在挖掘去中心化協議數據...", expanded=True) as status:
             raw = fetch_matters(s_query) + fetch_bluesky(s_query)
             now = datetime.now(HKT)
             filtered = [r for r in raw if not (t_filter == "最近 24 小時" and (now - r['raw_dt']) > timedelta(days=1)) and not (t_filter == "最近 7 天" and (now - r['raw_dt']) > timedelta(days=7))]
             st.session_state.social_results = sorted(filtered, key=lambda x: (x['likes'] if s_order=="🔥 互動次數" else x['raw_dt']), reverse=True)
             st.session_state.social_page = 0
-            status.update(label="✅ 數據抓取完成，AI 正在分析...", state="complete")
+            status.update(label="✅ 抓取完成，顯示結果...", state="complete")
+            st.rerun() # ⚠️ 修正點：抓完數據立即重新整理以顯示 AI 分析
 
-    # --- 顯示社交結果 (Item 10, 11) ---
     if st.session_state.social_results:
         res = st.session_state.social_results
-        
-        # AI 總結 (僅分析前10條最熱門/最新)
         st.subheader("✨ AI 趨勢分析")
+        ai_placeholder = st.empty()
+        ai_placeholder.info("🤖 AI 正在閱讀文章並撰寫總結...")
+        
         try:
             model = genai.GenerativeModel(available_model_path)
-            context = "\n".join([f"{d['title']}" for d in res[:10]])
+            context = "\n".join([f"{d['title']}" for d in res[:15]]) # 擴大分析到前 15 條
             safe = {cat: HarmBlockThreshold.BLOCK_NONE for cat in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT]}
-            response = model.generate_content(f"請分析以下社交平台討論趨勢：\n{context}", safety_settings=safe)
-            st.info(response.text)
-        except: st.warning("⚠️ AI 分析暫時不可用，請稍後再試。")
+            response = model.generate_content(f"請總結以下社交平台關於 '{s_query}' 的討論重點與趨勢：\n{context}", safety_settings=safe)
+            ai_placeholder.info(response.text)
+        except Exception as e: 
+            ai_placeholder.warning(f"⚠️ AI 分析目前不可用 ({str(e)})")
 
-        # 分頁處理
         total_p = (len(res) - 1) // 30 + 1
-        s_idx = st.session_state.social_page * 30
-        curr_p_data = res[s_idx : s_idx + 30]
-
+        curr_p_data = res[st.session_state.social_page*30 : (st.session_state.social_page+1)*30]
         for item in curr_p_data:
-            # Item 10: 刪除標題前 Icon，移至資訊列並以文字顯示
             st.markdown(f"### [{item['title']}]({item['link']})")
             st.caption(f"作者: {item['author']} | 平台: **{item['platform']}** | ❤️ {item['likes']} | {item['published']}")
             st.write(item['summary'][:200] + "...")
             st.divider()
 
-        # Item 11: 底部頁數與總數
-        st.write(f"第 {st.session_state.social_page + 1} / {total_p} 頁 (共 {len(res)} 則結果)")
+        st.write(f"第 {st.session_state.social_page + 1} / {total_p} 頁 (共 {len(res)} 則)")
         cc1, cc2, _ = st.columns([1, 1, 4])
-        if st.session_state.social_page > 0:
-            if cc1.button("⬅️ 上一頁 ", key="ps"): 
-                st.session_state.social_page -= 1; st.rerun()
-        if st.session_state.social_page < total_p - 1:
-            if cc2.button(" 下一頁 ➡️", key="ns"): 
-                st.session_state.social_page += 1; st.rerun()
+        if st.session_state.social_page > 0 and cc1.button("⬅️ 上一頁 ", key="ps"): st.session_state.social_page -= 1; st.rerun()
+        if st.session_state.social_page < total_p - 1 and cc2.button(" 下一頁 ➡️", key="ns"): st.session_state.social_page += 1; st.rerun()
