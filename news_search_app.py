@@ -10,18 +10,29 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import requests
 from atproto import Client
 
-# ==================== 0. 核心配置 (解耦穩定版) ====================
+# ==================== 0. 核心配置 (雙重保險與解耦) ====================
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# 1. 獨立讀取 Gemini，避免被其他連線錯誤干擾
-try:
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=GEMINI_API_KEY)
-except Exception as e:
-    st.error(f"❌ Gemini Key 讀取失敗，請檢查 Secrets：{str(e)}")
+# 自動偵測可能的 Key 名稱 (解決 Secrets 命名衝突問題)
+def get_gemini_key():
+    for key_name in ["GEMINI_API_KEY", "GOOGLE_API_KEY"]:
+        if key_name in st.secrets:
+            return st.secrets[key_name]
+    return None
+
+api_key = get_gemini_key()
+
+if api_key:
+    try:
+        genai.configure(api_key=api_key)
+    except Exception as e:
+        st.error(f"❌ Gemini 配置失敗：{str(e)}")
+        st.stop()
+else:
+    st.error("❌ 找不到 API Key。請確保 Secrets 中有 GEMINI_API_KEY 或 GOOGLE_API_KEY")
     st.stop()
 
-# 2. 獨立設定 Bluesky
+# 獨立設定 Bluesky (不放在 try 區塊內，避免連線失敗導致整個 App 報 Secrets 錯誤)
 BSKY_HANDLE = "bennysea97.bsky.social"
 BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 
@@ -196,7 +207,7 @@ else:
         if curr_data:
             st.subheader("✨ AI 總結觀點")
             try:
-                # 使用 Flash 模型並解除安全過濾
+                # 使用穩定性最高的 gemini-1.5-flash
                 model = genai.GenerativeModel('gemini-1.5-flash')
                 
                 safety_settings = {
