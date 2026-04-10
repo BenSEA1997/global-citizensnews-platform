@@ -44,9 +44,20 @@ TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvn
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
 ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "usatoday.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "telegraph.co.uk", "economist.com"}
 
-def get_domain(link):
-    try: return urlparse(link).netloc.replace("www.", "").lower()
-    except: return ""
+# 修復：更精準的白名單比對邏輯 (解決 RSS 轉址與子網域未匹配問題)
+def check_white(link, source_url, white_list):
+    domains = []
+    try: domains.append(urlparse(link).netloc.lower())
+    except: pass
+    if source_url:
+        try: domains.append(urlparse(source_url).netloc.lower())
+        except: pass
+    
+    for w in white_list:
+        for d in domains:
+            if w in d:
+                return True
+    return False
 
 def fetch_rss_news(url, start_hkt, end_hkt, white_list):
     articles = []
@@ -58,10 +69,12 @@ def fetch_rss_news(url, start_hkt, end_hkt, white_list):
             except: continue
             if not (start_hkt <= dt_hkt <= end_hkt): continue
             link = e.get('link', '')
+            source_url = e.get('source', {}).get('href', '')  # 抓出 RSS 真正的原始來源網址
             articles.append({
                 "title": e.get('title', '').rsplit(" - ", 1)[0], "link": link, 
                 "source": e.get('source', {}).get('title', 'Google News RSS'), 
-                "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"), "is_white": get_domain(link) in white_list,
+                "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"), 
+                "is_white": check_white(link, source_url, white_list),
                 "fetch_type": "rss"
             })
     except: pass
@@ -70,13 +83,14 @@ def fetch_rss_news(url, start_hkt, end_hkt, white_list):
 def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list):
     if not serper_key: return []
     all_results = []
+    headers = {'X-API-KEY': serper_key, 'Content-Type': 'application/json'}
+    
     # 1. 深度新聞挖掘 (8頁)
     news_url = "https://google.serper.dev/news"
     search_q = f"{query} after:{start_date} before:{end_date + timedelta(days=1)}"
     
     for page in range(1, 9):
         payload = json.dumps({"q": search_q, "gl": gl, "hl": hl, "num": 10, "page": page})
-        headers = {'X-API-KEY': serper_key, 'Content-Type': 'application/json'}
         try:
             res = requests.post(news_url, headers=headers, data=payload, timeout=10).json()
             items = res.get('news', [])
@@ -85,7 +99,7 @@ def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list):
                 all_results.append({
                     "title": i.get('title', ''), "link": i.get('link', ''),
                     "source": i.get('source', 'Google Search'), "pub_str": i.get('date', '歷史存檔'),
-                    "is_white": get_domain(i.get('link', '')) in white_list,
+                    "is_white": check_white(i.get('link', ''), '', white_list),
                     "fetch_type": "serper_news"
                 })
         except: break
@@ -98,7 +112,7 @@ def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list):
             all_results.append({
                 "title": i.get('title', ''), "link": i.get('link', ''),
                 "source": "Google 網頁補充", "pub_str": "搜尋引擎索引",
-                "is_white": get_domain(i.get('link', '')) in white_list,
+                "is_white": check_white(i.get('link', ''), '', white_list),
                 "fetch_type": "supplement"
             })
     except: pass
@@ -137,7 +151,6 @@ with st.sidebar:
     st.markdown("### 🌐 功能選單")
     app_mode = st.radio("請選擇模式：", ["新聞搜尋模式", "去中心化社交平台 Matters, Bluesky搜尋與分析"])
     
-    # 加入社交平台提示說明
     if "去中心化社交平台" in app_mode:
         st.info("ℹ️ Matters, Bluesky是來自各地研究員、記者、評論員等，撰寫評論和分析的去中心化社交平台")
 
@@ -147,7 +160,6 @@ if "新聞搜尋" in app_mode:
     query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
     
-    # 預設改為三日 (今天、昨天、前天 -> 減 2 天)
     with col1: start_date = st.date_input("開始", value=date.today() - timedelta(days=2))
     with col2: end_date = st.date_input("結束", value=date.today())
     
@@ -155,8 +167,7 @@ if "新聞搜尋" in app_mode:
     
     news_params = (query, region, start_date, end_date)
 
-    if st.button("執行新聞挖掘與分析", type="primary"):
-        # 動態 running bar 文字
+    if st.button("搜尋", type="primary"):  # 已修改按鈕文字
         with st.status("🔄 正在搜尋中 ...", expanded=True) as status:
             if not query: st.stop()
             start_hkt = HKT.localize(datetime.combine(start_date, datetime.min.time()))
@@ -182,22 +193,21 @@ if "新聞搜尋" in app_mode:
     if st.session_state.news_results is not None and st.session_state.last_news_params == news_params:
         res = st.session_state.news_results
         
-        # 沒搜到新聞的判斷
         if not res:
             st.warning("⚠️ 此關鍵字沒有搜到相關新聞")
         else:
-            # 加入綠色診斷框
+            # 修復：更精準的來源統計分類
             white_count = sum(1 for x in res if x.get('is_white'))
-            serper_count = sum(1 for x in res if x.get('fetch_type') in ['serper_news', 'rss'])
+            rss_count = sum(1 for x in res if x.get('fetch_type') == 'rss')
+            serper_count = sum(1 for x in res if x.get('fetch_type') == 'serper_news')
             supp_count = sum(1 for x in res if x.get('fetch_type') == 'supplement')
             
-            st.success(f"📊 **資料源診斷**：白名單數目: **{white_count}** ｜ Serper新聞數目: **{serper_count}** ｜ 補充包數目: **{supp_count}** ｜ 總數: **{len(res)}**")
+            # 加入了 RSS 的顯示，讓你更清楚知道資料組合
+            st.success(f"📊 **資料源診斷**：白名單數目: **{white_count}** ｜ RSS新聞: **{rss_count}** ｜ Serper新聞: **{serper_count}** ｜ 補充包: **{supp_count}** ｜ 總數: **{len(res)}**")
 
-            # 執行新聞 AI 分析 
             if enable_news_ai:
                 st.subheader("✨ 新聞輿情 AI 深度分析")
                 ai_news_box = st.empty()
-                # 更新動態文字
                 with st.spinner("🤖 AI正在閱讀資料和分析中..."):
                     try:
                         model = genai.GenerativeModel(available_model_path)
@@ -207,26 +217,23 @@ if "新聞搜尋" in app_mode:
                         ai_news_box.info(resp.text)
                     except: ai_news_box.warning("⚠️ 新聞 AI 分析暫時不可用")
 
-            # 列表顯示
             total_pages = (len(res)-1)//30+1
             start_idx = st.session_state.news_page * 30
             end_idx = min(start_idx + 30, len(res))
             curr_data = res[start_idx : end_idx]
             
             for n in curr_data:
-                # Icon 判斷邏輯
                 if n['is_white']:
                     icon = "✅"
                 elif n.get('fetch_type') == 'supplement':
                     icon = "🌐"
                 else:
-                    icon = "☑️" # Serper新聞藍Tick
+                    icon = "☑️"
                     
                 st.markdown(f"### {icon} [{n['title']}]({n['link']})")
                 st.caption(f"{n['source']} | {n['pub_str']}")
                 st.divider()
             
-            # 底部頁數顯示與控制
             st.write(f"顯示第 {start_idx + 1}-{end_idx} 則新聞 (第 {st.session_state.news_page+1} 頁 / 共 {total_pages} 頁，總數 {len(res)} 則)")
             c1, c2, _ = st.columns([1,1,4])
             if st.session_state.news_page > 0 and c1.button("⬅️ 上一頁"): st.session_state.news_page -= 1; st.rerun()
@@ -245,7 +252,6 @@ else:
     cur_s_params = (s_query, t_filter, s_order)
 
     if st.button("執行挖掘與 AI 分析", type="primary"):
-        # 更新動態文字
         with st.status("🔄 正在搜尋中 ...", expanded=True) as status:
             raw = fetch_matters(s_query) + fetch_bluesky(s_query)
             now = datetime.now(HKT)
@@ -263,7 +269,6 @@ else:
         else:
             st.subheader("✨ AI 趨勢分析")
             ai_box = st.empty()
-            # 更新動態文字
             with st.spinner("🤖 AI正在閱讀資料和分析中..."):
                 try:
                     model = genai.GenerativeModel(available_model_path)
@@ -273,7 +278,6 @@ else:
                     ai_box.info(response.text)
                 except: ai_box.warning("⚠️ AI 分析暫時不可用")
             
-            # 分頁顯示邏輯
             total_pages = (len(res)-1)//30+1
             start_idx = st.session_state.social_page * 30
             end_idx = min(start_idx + 30, len(res))
@@ -285,7 +289,6 @@ else:
                 st.write(item['summary'][:200] + "...")
                 st.divider()
             
-            # 底部頁數顯示與控制
             st.write(f"顯示第 {start_idx + 1}-{end_idx} 則貼文 (第 {st.session_state.social_page+1} 頁 / 共 {total_pages} 頁，總數 {len(res)} 則)")
             cc1, cc2, _ = st.columns([1,1,4])
             if st.session_state.social_page > 0 and cc1.button("⬅️ 上一頁 "): st.session_state.social_page -= 1; st.rerun()
