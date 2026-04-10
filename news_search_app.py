@@ -19,7 +19,7 @@ def get_secret(key):
 api_key = get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
 serper_key = get_secret("SERPER_API_KEY")
 
-# 初始化 Gemini
+# 初始化 Gemini 模型
 available_model_path = "gemini-1.5-flash"
 if api_key:
     try:
@@ -65,7 +65,7 @@ def fetch_serper_data(query, start_date, end_date, gl, hl, progress_bar):
     headers = {'X-API-KEY': serper_key, 'Content-Type': 'application/json'}
     search_q = f"{query} after:{start_date} before:{end_date + timedelta(days=1)}"
     
-    for page in range(1, 9): # 執行 8 次分頁抓取
+    for page in range(1, 9): # 呼叫 8 次分頁，深度挖掘
         progress_bar.progress(page * 10, text=f"正在挖掘分頁 {page}/8 ...")
         try:
             res = requests.post("https://google.serper.dev/news", headers=headers, 
@@ -85,32 +85,27 @@ def fetch_serper_data(query, start_date, end_date, gl, hl, progress_bar):
     return results
 
 # ==================== 3. UI 主介面 ====================
-st.set_page_config(page_title="全球 CitizensNews V13.12", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V13.15", layout="wide")
 
 if 'news_results' not in st.session_state: st.session_state.news_results = []
 if 'diag_data' not in st.session_state: st.session_state.diag_data = {}
 if 'last_news_params' not in st.session_state: st.session_state.last_news_params = None
 
-# --- Sidebar: 導航與介紹 ---
+# --- Sidebar ---
 with st.sidebar:
     app_mode = st.radio("功能導航", [
         "新聞搜尋模式", 
         "去中心化社交平台 Matters, Bluesky 深度搜尋"
     ])
-    
     st.divider()
-    
-    # 根據需求加入描述文字
     if "社交平台" in app_mode:
         st.write("Matters, Bluesky 是各地研究員、記者、專業人士，撰寫分析評論的去中心化社交平台。")
 
 # --- 主頁面 ---
 if app_mode == "新聞搜尋模式":
-    st.title("🌐 新聞搜尋深度挖掘引擎 V13.12")
+    st.title("🌐 新聞搜尋深度挖掘引擎 V13.15")
     
-    # 地區選擇 (大標題下方)
     region = st.radio("請選擇搜尋區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
-    
     query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
     with col1: start_date = st.date_input("開始", value=date.today() - timedelta(days=2))
@@ -122,7 +117,7 @@ if app_mode == "新聞搜尋模式":
     if st.button("執行新聞挖掘與分析", type="primary"):
         with st.status("正在挖掘資料中 ...", expanded=True) as status:
             if not query: st.warning("請輸入關鍵字"); st.stop()
-            prog = st.progress(0, text="準備啟動引擎...")
+            prog = st.progress(0, text="啟動挖掘引擎...")
             
             mapping = {"香港媒體": ("hk", "zh-hk", "HK:zh-Hant"), "台灣/世界華文": ("tw", "zh-tw", "TW:zh-Hant"), "環球英文媒體": ("us", "en", "US:en"), "中國大陸": ("cn", "zh-cn", "CN:zh-Hans")}
             gl, hl, ceid = mapping[region]
@@ -133,10 +128,10 @@ if app_mode == "新聞搜尋模式":
             
             serper_data = fetch_serper_data(query, start_date, end_date, gl, hl, prog)
             
+            # 去重與分類邏輯
             all_raw = rss_data + serper_data
             unique_news = {}
             diag = {"white": 0, "serper": 0, "extra": 0}
-            
             for item in all_raw:
                 url = item['link']
                 if is_white_list(url, item['source']): final_type = "white"
@@ -147,43 +142,57 @@ if app_mode == "新聞搜尋模式":
                     unique_news[url] = {**item, "type": final_type}
 
             for info in unique_news.values(): diag[info['type']] += 1
-            
             st.session_state.news_results = sorted(unique_news.values(), key=lambda x: (x.get("type") != "white", x.get("type") == "extra"))
             st.session_state.diag_data = diag
             st.session_state.last_news_params = news_params
             
-            prog.progress(100, text="挖掘完成！")
-            time.sleep(0.5)
             prog.empty()
-            status.update(label="✅ 挖掘任務已完成", state="complete")
+            status.update(label="✅ 挖掘任務完成", state="complete")
             st.rerun()
 
+    # --- 顯示結果 (分頁邏輯) ---
     if st.session_state.last_news_params == news_params:
-        res = st.session_state.news_results
-        if not res:
+        all_res = st.session_state.news_results
+        if not all_res:
             st.error("❌ 關鍵字搜尋沒有結果")
         else:
             d = st.session_state.diag_data
-            st.success(f"📊 **診斷數據測試**｜ ✅ 白名單：{d.get('white', 0)} 則 ｜ 🔹 Serper：{d.get('serper', 0)} 則 ｜ 🌍 補充包：{d.get('extra', 0)} 則 ｜ 📈 總數：{len(res)} 則")
+            st.success(f"📊 診斷數據｜ ✅ 白名單：{d.get('white',0)} ｜ 🔹 Serper：{d.get('serper',0)} ｜ 🌍 補充包：{d.get('extra',0)} ｜ 📈 總計：{len(all_res)} 則")
 
+            # AI 分析
             if enable_news_ai:
                 st.subheader("✨ 新聞輿情 AI 深度分析")
                 try:
                     model = genai.GenerativeModel(available_model_path)
-                    context = "\n".join([f"[{n.get('source')}] {n.get('title')}" for n in res[:30]])
+                    context = "\n".join([f"[{n.get('source')}] {n.get('title')}" for n in all_res[:30]])
                     safe = {cat: HarmBlockThreshold.BLOCK_NONE for cat in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT]}
-                    resp = model.generate_content(f"分析以下新聞趨勢：\n{context}", safety_settings=safe)
+                    resp = model.generate_content(f"請分析以下新聞趨勢：\n{context}", safety_settings=safe)
                     st.info(resp.text)
                 except: st.warning("⚠️ AI 分析暫時不可用")
 
-            for n in res:
+            # --- 30 則分頁器 ---
+            items_per_page = 30
+            total_pages = (len(all_res) - 1) // items_per_page + 1
+            
+            st.write("---")
+            page_num = st.select_slider("請滑動選擇頁碼", options=range(1, total_pages + 1), value=1)
+            
+            start_idx = (page_num - 1) * items_per_page
+            end_idx = start_idx + items_per_page
+            current_page_res = all_res[start_idx:end_idx]
+
+            st.caption(f"📍 正在顯示第 {page_num} 頁 (第 {start_idx+1} - {min(end_idx, len(all_res))} 則)")
+
+            for n in current_page_res:
                 n_type = n.get('type', 'extra')
                 icon = "✅" if n_type == "white" else ("🔹" if n_type == "serper" else "🌍")
-                st.markdown(f"### {icon} [{n.get('title', '無標題')}]({n.get('link', '#')})")
-                st.caption(f"{n.get('source', '未知來源')} | {n.get('pub_str', '未知時間')}")
+                st.markdown(f"### {icon} [{n.get('title')}]({n.get('link')})")
+                st.caption(f"{n.get('source')} | {n.get('pub_str')}")
                 st.divider()
 
+            if total_pages > 1:
+                st.center(f"第 {page_num} 頁 / 共 {total_pages} 頁")
+
 else:
-    # 社交平台邏輯與 UI
-    st.title("🛡️ 去中心化社交平台深度搜尋")
-    # ... 原有搜尋邏輯 ...
+    st.title("🛡️ 社交平台深度搜尋")
+    st.write("此處運行 Matters 與 Bluesky 的搜尋邏輯...")
