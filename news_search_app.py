@@ -7,7 +7,6 @@ from urllib.parse import urlparse, quote_plus
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import requests
-from atproto import Client
 import json
 import time
 
@@ -66,7 +65,7 @@ def fetch_serper_data(query, start_date, end_date, gl, hl, progress_bar):
     headers = {'X-API-KEY': serper_key, 'Content-Type': 'application/json'}
     search_q = f"{query} after:{start_date} before:{end_date + timedelta(days=1)}"
     
-    for page in range(1, 9):
+    for page in range(1, 9): # 執行 8 次分頁抓取
         progress_bar.progress(page * 10, text=f"正在挖掘分頁 {page}/8 ...")
         try:
             res = requests.post("https://google.serper.dev/news", headers=headers, 
@@ -86,31 +85,30 @@ def fetch_serper_data(query, start_date, end_date, gl, hl, progress_bar):
     return results
 
 # ==================== 3. UI 主介面 ====================
-st.set_page_config(page_title="全球 CitizensNews V13.9", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V13.12", layout="wide")
 
-# 初始化 Session State
-state_keys = ['news_results', 'diag_data', 'last_news_params']
-for k in state_keys:
-    if k not in st.session_state:
-        st.session_state[k] = [] if 'results' in k else ({} if 'diag' in k else None)
+if 'news_results' not in st.session_state: st.session_state.news_results = []
+if 'diag_data' not in st.session_state: st.session_state.diag_data = {}
+if 'last_news_params' not in st.session_state: st.session_state.last_news_params = None
 
-# --- Sidebar: 模式切換與平台介紹 ---
+# --- Sidebar: 導航與介紹 ---
 with st.sidebar:
-    st.title("🚀 CitizensNews")
-    app_mode = st.radio("功能導航", ["新聞搜尋模式", "去中心化社交平台搜尋"])
+    app_mode = st.radio("功能導航", [
+        "新聞搜尋模式", 
+        "去中心化社交平台 Matters, Bluesky 深度搜尋"
+    ])
+    
     st.divider()
+    
+    # 根據需求加入描述文字
     if "社交平台" in app_mode:
-        st.markdown("### 📚 平台介紹")
-        st.info("**Matters**: 基於 Web3 的去中心化寫作社區，強調創作自由與內容永存。")
-        st.info("**Bluesky**: 由 Twitter 創辦人發起的去中心化社交網絡，採用 AT 協議。")
-    else:
-        st.markdown("🔍 **新聞搜尋系統**：整合 Google RSS, Serper 深度挖掘與白名單過濾機制。")
+        st.write("Matters, Bluesky 是各地研究員、記者、專業人士，撰寫分析評論的去中心化社交平台。")
 
 # --- 主頁面 ---
 if app_mode == "新聞搜尋模式":
-    st.title("🌐 新聞搜尋深度挖掘引擎 V13.9")
+    st.title("🌐 新聞搜尋深度挖掘引擎 V13.12")
     
-    # 地區選擇移至標題下方
+    # 地區選擇 (大標題下方)
     region = st.radio("請選擇搜尋區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
     
     query = st.text_input("關鍵字", placeholder="例如：李家超")
@@ -186,7 +184,6 @@ if app_mode == "新聞搜尋模式":
                 st.divider()
 
 else:
-    # 社交平台搜尋模式 (維持原有邏輯)
-    st.title("🔵 社交平台深度搜尋")
-    st.write("此處為 Matters 與 Bluesky 搜尋界面...")
-    # (此處省略社交平台具體實作，與 V13.2 保持一致)
+    # 社交平台邏輯與 UI
+    st.title("🛡️ 去中心化社交平台深度搜尋")
+    # ... 原有搜尋邏輯 ...
