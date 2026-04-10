@@ -61,7 +61,8 @@ def fetch_rss_news(url, start_hkt, end_hkt, white_list):
             articles.append({
                 "title": e.get('title', '').rsplit(" - ", 1)[0], "link": link, 
                 "source": e.get('source', {}).get('title', 'Google News RSS'), 
-                "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"), "is_white": get_domain(link) in white_list
+                "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"), "is_white": get_domain(link) in white_list,
+                "fetch_type": "rss"
             })
     except: pass
     return articles
@@ -84,7 +85,8 @@ def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list):
                 all_results.append({
                     "title": i.get('title', ''), "link": i.get('link', ''),
                     "source": i.get('source', 'Google Search'), "pub_str": i.get('date', '歷史存檔'),
-                    "is_white": get_domain(i.get('link', '')) in white_list
+                    "is_white": get_domain(i.get('link', '')) in white_list,
+                    "fetch_type": "serper_news"
                 })
         except: break
 
@@ -96,12 +98,13 @@ def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list):
             all_results.append({
                 "title": i.get('title', ''), "link": i.get('link', ''),
                 "source": "Google 網頁補充", "pub_str": "搜尋引擎索引",
-                "is_white": get_domain(i.get('link', '')) in white_list
+                "is_white": get_domain(i.get('link', '')) in white_list,
+                "fetch_type": "supplement"
             })
     except: pass
     return all_results
 
-# ==================== 2. 社交挖掘封裝 (保持 12.8 邏輯) ====================
+# ==================== 2. 社交挖掘封裝 (保持 13.1 邏輯) ====================
 def fetch_matters(query):
     matters_api = "https://server.matters.news/graphql"
     query_json = {"query": f'query {{ search(input: {{key: "{query}", type: Article, first: 80}}) {{ edges {{ node {{ ... on Article {{ title shortHash summary author {{ displayName }} appreciationsReceivedTotal createdAt }} }} }} }} }}'}
@@ -127,28 +130,34 @@ def fetch_bluesky(query):
     except: pass
     return results
 
-# ==================== 3. 主介面 UI (V13.1) ====================
-st.set_page_config(page_title="全球 CitizensNews V13.1", layout="wide")
+# ==================== 3. 主介面 UI (V13.2) ====================
+st.set_page_config(page_title="全球 CitizensNews V13.2", layout="wide")
 
 with st.sidebar:
     st.markdown("### 🌐 功能選單")
     app_mode = st.radio("請選擇模式：", ["新聞搜尋模式", "去中心化社交平台 Matters, Bluesky搜尋與分析"])
+    
+    # 加入社交平台提示說明
+    if "去中心化社交平台" in app_mode:
+        st.info("ℹ️ Matters, Bluesky是來自各地研究員、記者、評論員等，撰寫評論和分析的去中心化社交平台")
 
 if "新聞搜尋" in app_mode:
-    st.title("🌐 新聞搜尋深度挖掘引擎 V13.1")
+    st.title("🌐 新聞搜尋模式 V13.2")
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
     query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
-    with col1: start_date = st.date_input("開始", value=date.today() - timedelta(days=7))
+    
+    # 預設改為三日 (今天、昨天、前天 -> 減 2 天)
+    with col1: start_date = st.date_input("開始", value=date.today() - timedelta(days=2))
     with col2: end_date = st.date_input("結束", value=date.today())
     
-    # 新功能：AI 分析開關
     enable_news_ai = st.toggle("🛡️ 開啟 AI 深度分析總結 (分析本次搜尋結果)", value=False)
     
     news_params = (query, region, start_date, end_date)
 
     if st.button("執行新聞挖掘與分析", type="primary"):
-        with st.status("正在挖掘資料中 ...", expanded=True) as status:
+        # 動態 running bar 文字
+        with st.status("🔄 正在搜尋中 ...", expanded=True) as status:
             if not query: st.stop()
             start_hkt = HKT.localize(datetime.combine(start_date, datetime.min.time()))
             end_hkt = HKT.localize(datetime.combine(end_date, datetime.max.time()))
@@ -156,12 +165,10 @@ if "新聞搜尋" in app_mode:
             mapping = {"香港媒體": (HK_WHITE_LIST, "hk", "zh-hk", "HK:zh-Hant"), "台灣/世界華文": (TW_WHITE_LIST, "tw", "zh-tw", "TW:zh-Hant"), "環球英文媒體": (ENGLISH_GLOBAL_LIST, "us", "en", "US:en"), "中國大陸": (CN_WHITE_LIST, "cn", "zh-cn", "CN:zh-Hans")}
             white_list, gl, hl, ceid = mapping[region]
             
-            # 啟動雙引擎 + 補充包
             rss_url = f"https://news.google.com/rss/search?q={quote_plus(query)}+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl.upper()}&ceid={ceid}"
             articles_rss = fetch_rss_news(rss_url, start_hkt, end_hkt, white_list)
             articles_ext = fetch_serper_combined(query, start_date, end_date, gl, hl, white_list)
             
-            # 去重
             unique = {}
             for a in (articles_rss + articles_ext):
                 if a['link'] not in unique: unique[a['link']] = a
@@ -172,34 +179,59 @@ if "新聞搜尋" in app_mode:
             status.update(label=f"✅ 挖掘完成！共獲取 {len(st.session_state.news_results)} 則結果", state="complete")
             st.rerun()
 
-    if st.session_state.news_results and st.session_state.last_news_params == news_params:
+    if st.session_state.news_results is not None and st.session_state.last_news_params == news_params:
         res = st.session_state.news_results
         
-        # 執行新聞 AI 分析 (如果開關打開)
-        if enable_news_ai:
-            st.subheader("✨ 新聞輿情 AI 深度分析")
-            ai_news_box = st.empty()
-            ai_news_box.info("🤖 AI 正在閱讀深度挖掘出的新聞報導...")
-            try:
-                model = genai.GenerativeModel(available_model_path)
-                context = "\n".join([f"[{a['source']}] {a['title']}" for a in res[:25]])
-                safe = {cat: HarmBlockThreshold.BLOCK_NONE for cat in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT]}
-                resp = model.generate_content(f"請分析以下新聞報導的主要趨勢、各方觀點對比及核心事件整理：\n{context}", safety_settings=safe)
-                ai_news_box.info(resp.text)
-            except: ai_news_box.warning("⚠️ 新聞 AI 分析暫時不可用")
+        # 沒搜到新聞的判斷
+        if not res:
+            st.warning("⚠️ 此關鍵字沒有搜到相關新聞")
+        else:
+            # 加入綠色診斷框
+            white_count = sum(1 for x in res if x.get('is_white'))
+            serper_count = sum(1 for x in res if x.get('fetch_type') in ['serper_news', 'rss'])
+            supp_count = sum(1 for x in res if x.get('fetch_type') == 'supplement')
+            
+            st.success(f"📊 **資料源診斷**：白名單數目: **{white_count}** ｜ Serper新聞數目: **{serper_count}** ｜ 補充包數目: **{supp_count}** ｜ 總數: **{len(res)}**")
 
-        # 列表顯示
-        total_pages = (len(res)-1)//30+1
-        curr_data = res[st.session_state.news_page*30 : (st.session_state.news_page+1)*30]
-        for n in curr_data:
-            icon = "✅" if n['is_white'] else "🌐"
-            st.markdown(f"### {icon} [{n['title']}]({n['link']})")
-            st.caption(f"{n['source']} | {n['pub_str']}")
-            st.divider()
-        
-        c1, c2, _ = st.columns([1,1,4])
-        if st.session_state.news_page > 0 and c1.button("⬅️ 上一頁"): st.session_state.news_page -= 1; st.rerun()
-        if st.session_state.news_page < total_pages-1 and c2.button("下一頁 ➡️"): st.session_state.news_page += 1; st.rerun()
+            # 執行新聞 AI 分析 
+            if enable_news_ai:
+                st.subheader("✨ 新聞輿情 AI 深度分析")
+                ai_news_box = st.empty()
+                # 更新動態文字
+                with st.spinner("🤖 AI正在閱讀資料和分析中..."):
+                    try:
+                        model = genai.GenerativeModel(available_model_path)
+                        context = "\n".join([f"[{a['source']}] {a['title']}" for a in res[:25]])
+                        safe = {cat: HarmBlockThreshold.BLOCK_NONE for cat in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT]}
+                        resp = model.generate_content(f"請分析以下新聞報導的主要趨勢、各方觀點對比及核心事件整理：\n{context}", safety_settings=safe)
+                        ai_news_box.info(resp.text)
+                    except: ai_news_box.warning("⚠️ 新聞 AI 分析暫時不可用")
+
+            # 列表顯示
+            total_pages = (len(res)-1)//30+1
+            start_idx = st.session_state.news_page * 30
+            end_idx = min(start_idx + 30, len(res))
+            curr_data = res[start_idx : end_idx]
+            
+            for n in curr_data:
+                # Icon 判斷邏輯
+                if n['is_white']:
+                    icon = "✅"
+                elif n.get('fetch_type') == 'supplement':
+                    icon = "🌐"
+                else:
+                    icon = "☑️" # Serper新聞藍Tick
+                    
+                st.markdown(f"### {icon} [{n['title']}]({n['link']})")
+                st.caption(f"{n['source']} | {n['pub_str']}")
+                st.divider()
+            
+            # 底部頁數顯示與控制
+            st.write(f"顯示第 {start_idx + 1}-{end_idx} 則新聞 (第 {st.session_state.news_page+1} 頁 / 共 {total_pages} 頁，總數 {len(res)} 則)")
+            c1, c2, _ = st.columns([1,1,4])
+            if st.session_state.news_page > 0 and c1.button("⬅️ 上一頁"): st.session_state.news_page -= 1; st.rerun()
+            if st.session_state.news_page < total_pages-1 and c2.button("下一頁 ➡️"): st.session_state.news_page += 1; st.rerun()
+            
     elif st.session_state.news_results:
         st.info("💡 搜尋參數已更改，請重新按鈕執行挖掘。")
 
@@ -213,11 +245,12 @@ else:
     cur_s_params = (s_query, t_filter, s_order)
 
     if st.button("執行挖掘與 AI 分析", type="primary"):
-        with st.status("正在挖掘資料中 ...", expanded=True) as status:
+        # 更新動態文字
+        with st.status("🔄 正在搜尋中 ...", expanded=True) as status:
             raw = fetch_matters(s_query) + fetch_bluesky(s_query)
             now = datetime.now(HKT)
             filtered = [r for r in raw if not (t_filter == "最近 24 小時" and (now - r['raw_dt']) > timedelta(days=1)) and not (t_filter == "最近 7 天" and (now - r['raw_dt']) > timedelta(days=7))]
-            st.session_state.social_results = sorted(filtered, key=lambda x: (x['likes'] if s_order=="🔥 互動次_數" else x['raw_dt']), reverse=True)
+            st.session_state.social_results = sorted(filtered, key=lambda x: (x['likes'] if s_order=="🔥 互動次數" else x['raw_dt']), reverse=True)
             st.session_state.social_page = 0
             st.session_state.last_social_params = cur_s_params
             st.session_state.social_has_searched = True
@@ -230,26 +263,33 @@ else:
         else:
             st.subheader("✨ AI 趨勢分析")
             ai_box = st.empty()
-            ai_box.info("🤖 AI 正在閱讀文章並撰寫總結...")
-            try:
-                model = genai.GenerativeModel(available_model_path)
-                context = "\n".join([f"{d['title']}" for d in res[:15]])
-                safe = {cat: HarmBlockThreshold.BLOCK_NONE for cat in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT]}
-                response = model.generate_content(f"分析社交趨勢：\n{context}", safety_settings=safe)
-                ai_box.info(response.text)
-            except: ai_box.warning("⚠️ AI 分析暫時不可用")
+            # 更新動態文字
+            with st.spinner("🤖 AI正在閱讀資料和分析中..."):
+                try:
+                    model = genai.GenerativeModel(available_model_path)
+                    context = "\n".join([f"{d['title']}" for d in res[:15]])
+                    safe = {cat: HarmBlockThreshold.BLOCK_NONE for cat in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT]}
+                    response = model.generate_content(f"分析社交趨勢：\n{context}", safety_settings=safe)
+                    ai_box.info(response.text)
+                except: ai_box.warning("⚠️ AI 分析暫時不可用")
             
-            curr_p = res[st.session_state.social_page*30 : (st.session_state.social_page+1)*30]
+            # 分頁顯示邏輯
+            total_pages = (len(res)-1)//30+1
+            start_idx = st.session_state.social_page * 30
+            end_idx = min(start_idx + 30, len(res))
+            curr_p = res[start_idx : end_idx]
+            
             for item in curr_p:
                 st.markdown(f"### [{item['title']}]({item['link']})")
                 st.caption(f"作者: {item['author']} | 平台: **{item['platform']}** | ❤️ {item['likes']} | {item['published']}")
                 st.write(item['summary'][:200] + "...")
                 st.divider()
             
-            tp = (len(res)-1)//30+1
+            # 底部頁數顯示與控制
+            st.write(f"顯示第 {start_idx + 1}-{end_idx} 則貼文 (第 {st.session_state.social_page+1} 頁 / 共 {total_pages} 頁，總數 {len(res)} 則)")
             cc1, cc2, _ = st.columns([1,1,4])
             if st.session_state.social_page > 0 and cc1.button("⬅️ 上一頁 "): st.session_state.social_page -= 1; st.rerun()
-            if st.session_state.social_page < tp-1 and cc2.button(" 下一頁 ➡️"): st.session_state.social_page += 1; st.rerun()
+            if st.session_state.social_page < total_pages-1 and cc2.button(" 下一頁 ➡️"): st.session_state.social_page += 1; st.rerun()
+            
     elif st.session_state.social_has_searched:
         st.info("💡 參數已更改，請重新按鈕。")
-
