@@ -10,7 +10,7 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import requests
 from atproto import Client
 
-# ==================== 0. 核心配置 (修正 SDK 相容性) ====================
+# ==================== 0. 核心配置 (AI 與 Key 偵測) ====================
 HKT = pytz.timezone('Asia/Hong_Kong')
 
 def get_gemini_key():
@@ -24,7 +24,7 @@ available_model_path = "gemini-1.5-flash"
 if api_key:
     try:
         genai.configure(api_key=api_key)
-        # 動態偵測模型名稱
+        # 動態偵測模型路徑
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         matched = [m for m in models if '1.5-flash' in m]
         available_model_path = matched[0] if matched else (models[0] if models else "gemini-1.5-flash")
@@ -41,7 +41,7 @@ BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 if 'social_results' not in st.session_state: st.session_state.social_results = []
 if 'social_page' not in st.session_state: st.session_state.social_page = 0
 
-# ==================== 1. 新聞媒體與邏輯 (保留 Ver 12.4) ====================
+# ==================== 1. 新聞媒體與邏輯 (保留 Ver 12.4 原樣) ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -152,4 +152,54 @@ if app_mode == "新聞搜尋":
         
         st.success(f"🔍 搜尋完成：核心媒體 {len([a for a in unique_articles if a['is_white']])} 則")
         for n in unique_articles:
-            icon =
+            # 🛠️ 修正先前斷行導致的 SyntaxError
+            icon = "✅" if n['is_white'] else "📦"
+            st.markdown(f"### {icon} [{n['title']}]({n['link']})")
+            st.caption(f"{n['source']} | {n['pub_str']}")
+            st.divider()
+
+        st.divider()
+        st.subheader("🛠️ 技術診斷資訊")
+        st.json({"搜尋關鍵字": query, "引擎地區": region, "最終顯示數": len(unique_articles), "API URL": url})
+
+else:
+    st.title("🔵 去中心社交平台搜尋與AI分析")
+    col_input, col_time, col_sort = st.columns([2, 1, 1])
+    with col_input: social_query = st.text_input("關鍵字", key="s_input")
+    with col_time: time_filter = st.selectbox("時間範圍", ["全部", "最近 24 小時", "最近 7 天"])
+    with col_sort: sort_order = st.selectbox("排序方式", ["🕒 最新發布", "🔥 互動次數"])
+
+    if st.button("執行挖掘與分析", type="primary"):
+        raw_all = fetch_matters(social_query) + fetch_bluesky(social_query)
+        now = datetime.now(HKT)
+        filtered = [r for r in raw_all if not (time_filter == "最近 24 小時" and (now - r['raw_dt']) > timedelta(days=1)) and not (time_filter == "最近 7 天" and (now - r['raw_dt']) > timedelta(days=7))]
+        st.session_state.social_results = sorted(filtered, key=lambda x: (x['likes'] if sort_order=="🔥 互動次數" else x['raw_dt']), reverse=True)
+        st.session_state.social_page = 0
+        st.rerun()
+
+    if st.session_state.social_results:
+        results = st.session_state.social_results
+        curr_data = results[st.session_state.social_page*20 : (st.session_state.social_page+1)*20]
+        if curr_data:
+            st.subheader("✨ AI 總結觀點")
+            try:
+                model = genai.GenerativeModel(available_model_path)
+                context = "\n".join([f"{d['title']}" for d in curr_data[:10]])
+                
+                safe = {
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+                
+                response = model.generate_content(f"請總結趨勢：\n{context}", safety_settings=safe)
+                st.info(response.text)
+            except Exception as ai_err: 
+                st.warning(f"⚠️ AI 分析暫時不可用（{str(ai_err)}）")
+
+        for item in curr_data:
+            st.markdown(f"### [{'✍️' if item['platform']=='Matters' else '🦋'}] [{item['title']}]({item['link']})")
+            st.caption(f"作者: {item['author']} | ❤️ {item['likes']} | {item['published']}")
+            st.write(item['summary'][:200])
+            st.divider()
