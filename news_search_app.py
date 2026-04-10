@@ -33,12 +33,13 @@ BSKY_HANDLE = "bennysea97.bsky.social"
 BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 
 # 初始化 Session State
-if 'news_results' not in st.session_state: st.session_state.news_results = []
-if 'news_page' not in st.session_state: st.session_state.news_page = 0
-if 'social_results' not in st.session_state: st.session_state.social_results = []
-if 'social_page' not in st.session_state: st.session_state.social_page = 0
-if 'last_social_params' not in st.session_state: st.session_state.last_social_params = None
-if 'social_has_searched' not in st.session_state: st.session_state.social_has_searched = False
+state_defaults = {
+    'news_results': [], 'news_page': 0, 
+    'social_results': [], 'social_page': 0,
+    'last_social_params': None, 'social_has_searched': False
+}
+for key, val in state_defaults.items():
+    if key not in st.session_state: st.session_state[key] = val
 
 # ==================== 1. 新聞邏輯 ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
@@ -57,8 +58,7 @@ def to_hkt_aware(dt_obj):
 def is_flexible_relevant(entry, query):
     title = entry.get('title', '').lower()
     kws = [kw for kw in re.findall(r'\w+', query.lower()) if len(kw) > 1]
-    if not kws: return True
-    return any(kw in title for kw in kws)
+    return not kws or any(kw in title for kw in kws)
 
 def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
     articles = []
@@ -103,8 +103,8 @@ def fetch_bluesky(query):
     except: pass
     return results
 
-# ==================== 3. 主介面 UI (V12.7) ====================
-st.set_page_config(page_title="全球 CitizensNews V12.7", layout="wide")
+# ==================== 3. 主介面 UI (V12.8) ====================
+st.set_page_config(page_title="全球 CitizensNews V12.8", layout="wide")
 
 with st.sidebar:
     st.markdown("### 🌐 功能選單")
@@ -157,7 +157,6 @@ else:
     with col_t: t_filter = st.selectbox("時間範圍", ["全部", "最近 24 小時", "最近 7 天"])
     with col_s: s_order = st.selectbox("排序方式", ["🕒 最新發布", "🔥 互動次數"])
 
-    # 目前介面上的參數組合
     current_params = (s_query, t_filter, s_order)
 
     if st.button("執行挖掘與 AI 分析", type="primary"):
@@ -167,27 +166,30 @@ else:
             filtered = [r for r in raw if not (t_filter == "最近 24 小時" and (now - r['raw_dt']) > timedelta(days=1)) and not (t_filter == "最近 7 天" and (now - r['raw_dt']) > timedelta(days=7))]
             st.session_state.social_results = sorted(filtered, key=lambda x: (x['likes'] if s_order=="🔥 互動次數" else x['raw_dt']), reverse=True)
             st.session_state.social_page = 0
-            st.session_state.last_social_params = current_params # 記錄這份結果對應的參數
-            st.session_state.social_has_searched = True # 標記已經執行過搜尋
-            status.update(label="✅ 處理完成", state="complete")
+            st.session_state.last_social_params = current_params
+            st.session_state.social_has_searched = True
+            status.update(label="✅ 挖掘完成，正在生成分析...", state="complete")
             st.rerun()
 
-    # 邏輯檢查：只有當目前選項與最後一次按下按鈕時的選項一致，才顯示結果
     if st.session_state.social_has_searched and st.session_state.last_social_params == current_params:
         res = st.session_state.social_results
         
         if not res:
             st.warning("⚠️ 沒有搜尋到此關鍵字貼文。")
         else:
-            # AI 趨勢分析
+            # AI 趨勢分析區塊 (回歸視覺提示)
             st.subheader("✨ AI 趨勢分析")
+            ai_box = st.empty() # 創建一個空容器
+            ai_box.info("🤖 AI 正在閱讀文章並撰寫總結，請稍候...") # 先放提示
+            
             try:
                 model = genai.GenerativeModel(available_model_path)
                 context = "\n".join([f"{d['title']}" for d in res[:15]])
                 safe = {cat: HarmBlockThreshold.BLOCK_NONE for cat in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT]}
                 response = model.generate_content(f"請總結社交平台討論趨勢：\n{context}", safety_settings=safe)
-                st.info(response.text)
-            except: st.warning("⚠️ AI 分析暫時不可用")
+                ai_box.info(response.text) # AI 完成後，替換掉「正在閱讀」提示
+            except: 
+                ai_box.warning("⚠️ AI 分析暫時不可用")
 
             total_p = (len(res) - 1) // 30 + 1
             curr_p_data = res[st.session_state.social_page*30 : (st.session_state.social_page+1)*30]
