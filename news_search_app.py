@@ -6,29 +6,31 @@ from time import mktime
 import pytz
 from urllib.parse import urlparse, quote_plus
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import requests
 from atproto import Client
-# 【AI 修正 1】加入安全設定類別引用
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-# ==================== 0. 核心配置 ====================
+# ==================== 0. 核心配置 (解耦穩定版) ====================
 HKT = pytz.timezone('Asia/Hong_Kong')
 
+# 1. 獨立讀取 Gemini，避免被其他連線錯誤干擾
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    BSKY_HANDLE = "bennysea97.bsky.social"
-    BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
     genai.configure(api_key=GEMINI_API_KEY)
 except Exception as e:
-    st.error("❌ Secrets 設定錯誤。")
+    st.error(f"❌ Gemini Key 讀取失敗，請檢查 Secrets：{str(e)}")
     st.stop()
+
+# 2. 獨立設定 Bluesky
+BSKY_HANDLE = "bennysea97.bsky.social"
+BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 
 if 'social_results' not in st.session_state:
     st.session_state.social_results = []
 if 'social_page' not in st.session_state:
     st.session_state.social_page = 0
 
-# ==================== 1. 新聞媒體與邏輯 (回歸 10.1 核心) ====================
+# ==================== 1. 新聞媒體與邏輯 ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -85,7 +87,7 @@ def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
         return articles, diag
     except: return [], diag
 
-# ==================== 2. 社交平台 (封存不動) ====================
+# ==================== 2. 社交平台 ====================
 def fetch_matters(query):
     matters_api = "https://server.matters.news/graphql"
     query_json = {"query": f'query {{ search(input: {{key: "{query}", type: Article, first: 80}}) {{ edges {{ node {{ ... on Article {{ title shortHash summary author {{ displayName }} appreciationsReceivedTotal createdAt }} }} }} }} }}'}
@@ -109,10 +111,11 @@ def fetch_bluesky(query):
         for post in response.posts:
             dt = datetime.fromisoformat(post.record.created_at.replace('Z', '+00:00')).astimezone(HKT)
             results.append({"title": post.record.text[:60].replace('\n',' ') + "...", "link": f"https://bsky.app/profile/{post.author.handle}/post/{post.uri.split('/')[-1]}", "author": post.author.display_name or post.author.handle, "likes": (post.like_count or 0) + (post.repost_count or 0), "summary": post.record.text, "published": dt.strftime("%Y-%m-%d %H:%M"), "platform": "Bluesky", "raw_dt": dt})
-    except: pass
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Bluesky 暫時無法連線，跳過抓取。原因: {str(e)}")
     return results
 
-# ==================== 3. 主介面 UI (優化顯示方式) ====================
+# ==================== 3. 主介面 UI ====================
 st.set_page_config(page_title="全球 CitizensNews V12.4", layout="wide")
 
 with st.sidebar:
@@ -193,8 +196,7 @@ else:
         if curr_data:
             st.subheader("✨ AI 總結觀點")
             try:
-                # 【AI 修正 2】強制解除安全限制 (BLOCK_NONE)
-                # 維持你習慣的 gemini-1.5-pro 增加穩定度 (或改回 models/gemini-2.0-flash)
+                # 使用 Flash 模型並解除安全過濾
                 model = genai.GenerativeModel('gemini-1.5-flash')
                 
                 safety_settings = {
@@ -205,15 +207,13 @@ else:
                 }
                 
                 context = "\n".join([f"{d['title']}" for d in curr_data[:10]])
-                # 傳入安全設定
                 response = model.generate_content(
                     f"請分析討論趨勢：\n{context}",
                     safety_settings=safety_settings
                 )
                 st.info(response.text)
             except Exception as ai_err: 
-                # 這裡顯示具體錯誤，不再只顯示「AI 限制」
-                st.warning(f"AI 目前受限：{str(ai_err)}")
+                st.warning(f"⚠️ AI 服務目前無法回應：{str(ai_err)}")
 
         for item in curr_data:
             st.markdown(f"### [{'✍️' if item['platform']=='Matters' else '🦋'}] [{item['title']}]({item['link']})")
