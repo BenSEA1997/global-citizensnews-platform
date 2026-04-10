@@ -10,29 +10,24 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import requests
 from atproto import Client
 
-# ==================== 0. 核心配置 (精準修補區) ====================
+# ==================== 0. 核心配置 (修正安全類別) ====================
 HKT = pytz.timezone('Asia/Hong_Kong')
 
-# 自動偵測 Key (解決 Secrets 命名不一致問題)
 def get_gemini_key():
     for name in ["GEMINI_API_KEY", "GOOGLE_API_KEY"]:
         if name in st.secrets: return st.secrets[name]
     return None
 
 api_key = get_gemini_key()
-available_model_path = "gemini-1.5-flash" # 預設
+available_model_path = "gemini-1.5-flash"
 
 if api_key:
     try:
         genai.configure(api_key=api_key)
-        # 🧪 動態偵測模型：解決 "404 models/gemini-1.5-flash not found for v1beta"
+        # 動態偵測模型
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        # 優先尋找 flash 1.5 的完整路徑
         matched = [m for m in models if '1.5-flash' in m]
-        if matched:
-            available_model_path = matched[0]
-        elif models:
-            available_model_path = models[0]
+        available_model_path = matched[0] if matched else (models[0] if models else "gemini-1.5-flash")
     except Exception as e:
         st.error(f"❌ Gemini 初始化失敗：{str(e)}")
         st.stop()
@@ -46,7 +41,7 @@ BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 if 'social_results' not in st.session_state: st.session_state.social_results = []
 if 'social_page' not in st.session_state: st.session_state.social_page = 0
 
-# ==================== 1. 新聞媒體與邏輯 (保留原樣) ====================
+# ==================== 1. 新聞媒體與邏輯 (保留 Ver 12.4) ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -67,11 +62,10 @@ def is_flexible_relevant(entry, query):
     kws = [kw for kw in re.findall(r'\w+', query_clean) if len(kw) > 1]
     if not kws: return True
     if any(kw in title for kw in kws): return True
-    synonyms = {"李家超": ["特首", "行政長官", "john lee"], "特首": ["李家超"]}
+    synonyms = {"特首": ["李家超", "john lee"]}
     for main_kw, syns in synonyms.items():
         if main_kw in query_clean and any(s in title for s in syns): return True
-    if any(kw in summary for kw in kws): return True
-    return False
+    return any(kw in summary for kw in kws)
 
 def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
     articles = []
@@ -89,10 +83,9 @@ def fetch_google_news(url, start_hkt, end_hkt, query, white_list):
             clean_title = e.get('title', '').rsplit(" - ", 1)[0]
             raw_source = e.get('source', {})
             real_domain = get_domain(raw_source.get('href', raw_source.get('url', '')))
-            source_title = raw_source.get('title', '未知來源')
             articles.append({
                 "title": clean_title, "link": e.get('link', ''), 
-                "real_domain": real_domain, "source": source_title, 
+                "real_domain": real_domain, "source": raw_source.get('title', '未知來源'), 
                 "published_dt": dt_hkt, "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"),
                 "is_white": real_domain in white_list
             })
@@ -123,8 +116,7 @@ def fetch_bluesky(query):
         for post in response.posts:
             dt = datetime.fromisoformat(post.record.created_at.replace('Z', '+00:00')).astimezone(HKT)
             results.append({"title": post.record.text[:60].replace('\n',' ') + "...", "link": f"https://bsky.app/profile/{post.author.handle}/post/{post.uri.split('/')[-1]}", "author": post.author.display_name or post.author.handle, "likes": (post.like_count or 0) + (post.repost_count or 0), "summary": post.record.text, "published": dt.strftime("%Y-%m-%d %H:%M"), "platform": "Bluesky", "raw_dt": dt})
-    except Exception as e:
-        st.sidebar.warning(f"⚠️ Bluesky 暫時無法連線。")
+    except: pass
     return results
 
 # ==================== 3. 主介面 UI (嚴格維持 Ver 12.4) ====================
@@ -158,20 +150,16 @@ if app_mode == "新聞搜尋":
         seen = set()
         unique_articles = sorted([a for a in all_articles if a['link'] not in seen and not seen.add(a['link'])], key=lambda x: x["published_dt"], reverse=True)
         
-        white_count = len([a for a in unique_articles if a['is_white']])
-        extra_count = len(unique_articles) - white_count
-        st.success(f"🔍 搜尋完成：核心媒體 {white_count} 則，補充包 {extra_count} 則")
-        
+        st.success(f"🔍 搜尋完成：核心媒體 {len([a for a in unique_articles if a['is_white']])} 則")
         for n in unique_articles:
             icon = "✅" if n['is_white'] else "📦"
-            label = "核心來源" if n['is_white'] else "補充來源"
             st.markdown(f"### {icon} [{n['title']}]({n['link']})")
-            st.caption(f"{label}：{n['source']} | 時間：{n['pub_str']}")
+            st.caption(f"{n['source']} | {n['pub_str']}")
             st.divider()
 
         st.divider()
         st.subheader("🛠️ 技術診斷資訊")
-        st.json({"搜尋關鍵字": query, "引擎地區": region, "原始抓取總數": diag["raw_count"], "雜訊剔除數": diag["filtered_count"], "最終顯示數": len(unique_articles), "API URL": url})
+        st.json({"搜尋關鍵字": query, "引擎地區": region, "最終顯示數": len(unique_articles), "API URL": url})
 
 else:
     st.title("🔵 去中心社交平台搜尋與AI分析")
@@ -181,9 +169,7 @@ else:
     with col_sort: sort_order = st.selectbox("排序方式", ["🕒 最新發布", "🔥 互動次數"])
 
     if st.button("執行挖掘與分析", type="primary"):
-        m_results = fetch_matters(social_query)
-        b_results = fetch_bluesky(social_query)
-        raw_all = m_results + b_results
+        raw_all = fetch_matters(social_query) + fetch_bluesky(social_query)
         now = datetime.now(HKT)
         filtered = [r for r in raw_all if not (time_filter == "最近 24 小時" and (now - r['raw_dt']) > timedelta(days=1)) and not (time_filter == "最近 7 天" and (now - r['raw_dt']) > timedelta(days=7))]
         st.session_state.social_results = sorted(filtered, key=lambda x: (x['likes'] if sort_order=="🔥 互動次數" else x['raw_dt']), reverse=True)
@@ -196,20 +182,25 @@ else:
         if curr_data:
             st.subheader("✨ AI 總結觀點")
             try:
-                # 🛠️ 核心修正：使用動態偵測到的正確模型路徑
                 model = genai.GenerativeModel(available_model_path)
                 context = "\n".join([f"{d['title']}" for d in curr_data[:10]])
                 
-                response = model.generate_content(
-                    f"請分析討論趨勢：\n{context}",
-                    safety_settings={cat: HarmBlockThreshold.BLOCK_NONE for cat in HarmCategory}
-                )
+                # 🛠️ 核心修正：僅使用 API 支援的 5 個安全類別
+                safe = {
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY: HarmBlockThreshold.BLOCK_NONE,
+                }
+                
+                response = model.generate_content(f"請總結趨勢：\n{context}", safety_settings=safe)
                 st.info(response.text)
             except Exception as ai_err: 
                 st.warning(f"⚠️ AI 分析暫時不可用（{str(ai_err)}）")
 
         for item in curr_data:
             st.markdown(f"### [{'✍️' if item['platform']=='Matters' else '🦋'}] [{item['title']}]({item['link']})")
-            st.caption(f"作者: {item['author']} | ❤️ {item['likes']} | 日期: {item['published']}")
+            st.caption(f"作者: {item['author']} | ❤️ {item['likes']} | {item['published']}")
             st.write(item['summary'][:200])
             st.divider()
