@@ -59,7 +59,7 @@ def fetch_serper_data(query, start_date, end_date, gl, hl, progress_bar):
     headers = {'X-API-KEY': serper_key, 'Content-Type': 'application/json'}
     search_q = f"{query} after:{start_date} before:{end_date + timedelta(days=1)}"
     for page in range(1, 9):
-        progress_bar.progress(page * 10, text=f"正在挖掘分頁 {page}/8 ...")
+        progress_bar.progress(page * 10, text=f"正在挖掘資料中 ... ({page}/8)")
         try:
             res = requests.post("https://google.serper.dev/news", headers=headers, data=json.dumps({"q": search_q, "gl": gl, "hl": hl, "num": 10, "page": page}), timeout=10).json()
             items = res.get('news', [])
@@ -70,11 +70,13 @@ def fetch_serper_data(query, start_date, end_date, gl, hl, progress_bar):
     return results
 
 # ==================== 3. UI 主介面 ====================
-st.set_page_config(page_title="全球 CitizensNews V13.16", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V13.17", layout="wide")
 
+# 初始化 Session State
 if 'news_results' not in st.session_state: st.session_state.news_results = []
 if 'diag_data' not in st.session_state: st.session_state.diag_data = {}
 if 'last_news_params' not in st.session_state: st.session_state.last_news_params = None
+if 'current_page' not in st.session_state: st.session_state.current_page = 1
 
 with st.sidebar:
     app_mode = st.radio("功能導航", ["新聞搜尋模式", "去中心化社交平台 Matters, Bluesky 深度搜尋"])
@@ -83,7 +85,7 @@ with st.sidebar:
         st.write("Matters, Bluesky 是各地研究員、記者、專業人士，撰寫分析評論的去中心化社交平台。")
 
 if app_mode == "新聞搜尋模式":
-    st.title("🌐 新聞搜尋深度挖掘引擎 V13.16")
+    st.title("🌐 新聞搜尋深度挖掘引擎 V13.17")
     region = st.radio("請選擇搜尋區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
     query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
@@ -103,17 +105,15 @@ if app_mode == "新聞搜尋模式":
             serper_data = fetch_serper_data(query, start_date, end_date, gl, hl, prog)
             
             unique_news = {}
-            diag = {"white": 0, "serper": 0, "extra": 0}
             for item in rss_data + serper_data:
                 url = item['link']
                 final_type = "white" if is_white_list(url, item['source']) else "serper"
                 if url not in unique_news or (final_type == "white" and unique_news[url].get('type') != "white"):
                     unique_news[url] = {**item, "type": final_type}
 
-            for info in unique_news.values(): diag[info['type']] += 1
             st.session_state.news_results = sorted(unique_news.values(), key=lambda x: (x.get("type") != "white"))
-            st.session_state.diag_data = diag
             st.session_state.last_news_params = news_params
+            st.session_state.current_page = 1 # 每次新搜尋重置回第一頁
             prog.empty()
             status.update(label="✅ 挖掘完成", state="complete")
             st.rerun()
@@ -123,26 +123,16 @@ if app_mode == "新聞搜尋模式":
         if not all_res:
             st.error("❌ 關鍵字搜尋沒有結果")
         else:
-            d = st.session_state.diag_data
-            st.success(f"📊 總計：{len(all_res)} 則 (✅白名單: {d.get('white',0)} | 🔹Serper: {d.get('serper',0)})")
-
-            if enable_news_ai:
-                st.subheader("✨ 新聞輿情 AI 深度分析")
-                try:
-                    model = genai.GenerativeModel(available_model_path)
-                    context = "\n".join([f"[{n.get('source')}] {n.get('title')}" for n in all_res[:30]])
-                    resp = model.generate_content(f"分析以下新聞趨勢：\n{context}")
-                    st.info(resp.text)
-                except: st.warning("⚠️ AI 分析暫時不可用")
-
-            # --- 修正後的 30 則分頁器 ---
             items_per_page = 30
             total_pages = (len(all_res) - 1) // items_per_page + 1
-            st.write("---")
-            page_num = st.select_slider("請滑動選擇頁碼", options=range(1, total_pages + 1), value=1)
             
-            start_idx = (page_num - 1) * items_per_page
+            # --- 分頁內容呈現 ---
+            curr_p = st.session_state.current_page
+            start_idx = (curr_p - 1) * items_per_page
             current_page_res = all_res[start_idx : start_idx + items_per_page]
+
+            st.write(f"📊 總計：{len(all_res)} 則新聞 ｜ 當前顯示第 {curr_p} / {total_pages} 頁")
+            st.divider()
 
             for n in current_page_res:
                 icon = "✅" if n.get('type') == "white" else "🔹"
@@ -150,8 +140,23 @@ if app_mode == "新聞搜尋模式":
                 st.caption(f"{n.get('source')} | {n.get('pub_str')}")
                 st.divider()
 
-            # 使用 Markdown 實現文字置中，修復 AttributeError
-            st.markdown(f"<div style='text-align: center; color: gray;'>第 {page_num} 頁 / 共 {total_pages} 頁</div>", unsafe_allow_html=True)
+            # --- 底部翻頁按鈕 ---
+            btn_col1, btn_col2, btn_col3 = st.columns([1, 2, 1])
+            
+            with btn_col1:
+                if curr_p > 1:
+                    if st.button("⬅️ 上一頁"):
+                        st.session_state.current_page -= 1
+                        st.rerun()
+            
+            with btn_col2:
+                st.markdown(f"<p style='text-align: center; color: gray;'>第 {curr_p} 頁 / 共 {total_pages} 頁</p>", unsafe_allow_html=True)
+            
+            with btn_col3:
+                if curr_p < total_pages:
+                    if st.button("下一頁 ➡️"):
+                        st.session_state.current_page += 1
+                        st.rerun()
 
 else:
     st.title("🛡️ 社交平台深度搜尋")
