@@ -21,20 +21,25 @@ def get_secret(key):
 api_key = get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
 serper_key = get_secret("SERPER_API_KEY")
 
-# V15.2 修復: 完全還原 V13.1 的 AI 載入邏輯
-available_model_path = "gemini-1.5-flash"
+# V15.5 修復: 採用 Google 建議路徑，但完全保留 V13.1/15.2 的 AI 載入偵測邏輯架構
+available_model_path = "gemini-1.5-flash-latest"
 if api_key:
     try:
         genai.configure(api_key=api_key)
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        matched = [m for m in models if '1.5-flash' in m]
-        available_model_path = matched[0] if matched else (models[0] if models else "gemini-1.5-flash")
-    except: pass
+        # 優先搜尋最新帶後綴的模型路徑
+        matched = [m for m in models if '1.5-flash-latest' in m]
+        if not matched:
+            matched = [m for m in models if '1.5-flash' in m]
+        
+        available_model_path = matched[0] if matched else (models[0] if models else "gemini-1.5-flash-latest")
+    except: 
+        available_model_path = "gemini-1.5-flash-latest"
 
 BSKY_HANDLE = "bennysea97.bsky.social"
 BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 
-# 初始化 Session State
+# 初始化 Session State (還原完整列表)
 state_keys = ['news_results', 'news_page', 'social_results', 'social_page', 'last_social_params', 'social_has_searched', 'last_news_params']
 for k in state_keys:
     if k not in st.session_state:
@@ -81,7 +86,7 @@ def check_white(link, source_url, white_list):
             if w in d: return True
     return False
 
-# V15.2 修復: 強制字串攔截，防堵外地媒體滲透
+# V15.5 還原 V15.2 的強化字串攔截機制
 def check_black(link, source_url, region):
     if region != "香港媒體": 
         return False
@@ -90,7 +95,6 @@ def check_black(link, source_url, region):
     if source_url:
         check_strings.append(str(source_url).lower())
         
-    # 只要 URL 中包含黑名單字眼，直接攔截 (最高優先級)
     for b in HK_BLACK_LIST:
         for s in check_strings:
             if b in s: 
@@ -101,7 +105,6 @@ def check_black(link, source_url, region):
         try: domains.append(urlparse(s).netloc)
         except: pass
 
-    # 檢查網域結尾特徵
     for d in domains:
         if d.endswith(('.tw', '.cn', '.sg', '.mo')): return True
         if '.tw.' in d or '.cn.' in d: return True
@@ -228,7 +231,7 @@ def fetch_bluesky(query):
     return results
 
 # ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V15.2", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V15.5", layout="wide")
 
 with st.sidebar:
     st.markdown("### 🌐 功能選單")
@@ -237,7 +240,7 @@ with st.sidebar:
         st.info("ℹ️ Matters, Bluesky是來自各地研究員、記者、評論員等，撰寫評論和分析的去中心化社交平台")
 
 if "新聞搜尋" in app_mode:
-    st.title("🌐 新聞搜尋模式 V15.2")
+    st.title("🌐 新聞搜尋模式 V15.5")
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
     query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
@@ -272,6 +275,7 @@ if "新聞搜尋" in app_mode:
         res = st.session_state.news_results
         if not res: st.warning("⚠️ 此關鍵字沒有搜到相關新聞")
         else:
+            # V15.5 嚴格還原 V15.2 的診斷統計顯示
             white_count = sum(1 for x in res if x.get('is_white'))
             rss_count = sum(1 for x in res if x.get('fetch_type') == 'rss')
             serper_count = sum(1 for x in res if x.get('fetch_type') == 'serper_news')
@@ -308,14 +312,15 @@ if "新聞搜尋" in app_mode:
                 st.caption(f"{n['source']} | {n['pub_str']}")
                 st.divider()
                 
+            # 還原分頁文字說明
             st.write(f"顯示第 {start_idx + 1}-{end_idx} 則新聞 (第 {st.session_state.news_page+1} 頁 / 共 {total_pages} 頁，總數 {len(res)} 則)")
             c1, c2, _ = st.columns([1,1,4])
             if st.session_state.news_page > 0 and c1.button("⬅️ 上一頁"): st.session_state.news_page -= 1; st.rerun()
             if st.session_state.news_page < total_pages-1 and c2.button("下一頁 ➡️"): st.session_state.news_page += 1; st.rerun()
 
 else:
-    # ==================== 社交分析模式 ====================
-    st.title("🔵 社交平台深度搜尋與分析 V15.2")
+    # ==================== 社交分析模式 (完全還原 V15.2) ====================
+    st.title("🔵 社交平台深度搜尋與分析 V15.5")
     col_i, col_t, col_s = st.columns([2, 1, 1])
     with col_i: s_query = st.text_input("搜尋關鍵字", key="s_input")
     with col_t: t_filter = st.selectbox("時間範圍", ["全部", "最近 24 小時", "最近 7 天"])
@@ -364,6 +369,7 @@ else:
                 st.caption(f"作者: {item['author']} | 平台: **{item['platform']}** | ❤️ {item['likes']} | {item['published']}")
                 st.write(item['summary'][:200] + "...")
                 st.divider()
+            
             st.write(f"顯示第 {start_idx + 1}-{end_idx} 則貼文 (第 {st.session_state.social_page+1} 頁 / 共 {total_pages} 頁，總數 {len(res)} 則)")
             cc1, cc2, _ = st.columns([1,1,4])
             if st.session_state.social_page > 0 and cc1.button("⬅️ 上一頁 "): st.session_state.social_page -= 1; st.rerun()
