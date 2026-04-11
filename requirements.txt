@@ -1,6 +1,6 @@
 streamlit
 feedparser
 pytz
-google-genai
 requests
 atproto
+google-generativeai
