@@ -21,20 +21,15 @@ def get_secret(key):
 api_key = get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
 serper_key = get_secret("SERPER_API_KEY")
 
-# V15.1 修復: AI 404 錯誤 - 改進模型初始化邏輯
-available_model_path = "models/gemini-1.5-flash"
+# V15.2 修復: 完全還原 V13.1 的 AI 載入邏輯
+available_model_path = "gemini-1.5-flash"
 if api_key:
     try:
         genai.configure(api_key=api_key)
-        # 獲取可用模型列表，並強制確保路徑包含 models/
-        model_list = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        # 優先尋找 1.5-flash
-        matched = [m for m in model_list if '1.5-flash' in m]
-        if matched:
-            # 如果模型名沒帶 models/ 則補上
-            available_model_path = matched[0] if matched[0].startswith("models/") else f"models/{matched[0]}"
-    except:
-        available_model_path = "models/gemini-1.5-flash"
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        matched = [m for m in models if '1.5-flash' in m]
+        available_model_path = matched[0] if matched else (models[0] if models else "gemini-1.5-flash")
+    except: pass
 
 BSKY_HANDLE = "bennysea97.bsky.social"
 BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
@@ -51,7 +46,6 @@ TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvn
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
 ENGLISH_GLOBAL_LIST = {"bbc.com", "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "theguardian.com", "washingtonpost.com", "nytimes.com", "wsj.com", "cnn.com", "nbcnews.com", "abcnews.go.com", "usatoday.com", "dailymail.co.uk", "mirror.co.uk", "sky.com", "telegraph.co.uk", "economist.com"}
 
-# V15.1 修改: 納入新提供的黑名單
 HK_BLACK_LIST = {
     "tw.news.yahoo.com", "yahoo.com.tw", "taisounds.com", "newtalk.tw", "udn.com", "storm.mg", "today.line.me", 
     "people.com.cn", "beijing.gov.cn", "cna.com.tw", "i-meihua.com", "ltn.com.tw", "msn.com", "setn.com", 
@@ -60,7 +54,6 @@ HK_BLACK_LIST = {
     "zh-yue.wikipedia.org", "big5.cctv.com", "zh.wikipedia.org"
 }
 
-# V15.1 新增: 相對日期轉換函數
 def process_relative_date(date_str):
     now = datetime.now(HKT)
     s = date_str.lower()
@@ -88,20 +81,31 @@ def check_white(link, source_url, white_list):
             if w in d: return True
     return False
 
+# V15.2 修復: 強制字串攔截，防堵外地媒體滲透
 def check_black(link, source_url, region):
     if region != "香港媒體": 
         return False
-    domains = []
-    try: domains.append(urlparse(link).netloc.lower())
-    except: pass
+    
+    check_strings = [str(link).lower()]
     if source_url:
-        try: domains.append(urlparse(source_url).netloc.lower())
+        check_strings.append(str(source_url).lower())
+        
+    # 只要 URL 中包含黑名單字眼，直接攔截 (最高優先級)
+    for b in HK_BLACK_LIST:
+        for s in check_strings:
+            if b in s: 
+                return True
+                
+    domains = []
+    for s in check_strings:
+        try: domains.append(urlparse(s).netloc)
         except: pass
+
+    # 檢查網域結尾特徵
     for d in domains:
-        for b in HK_BLACK_LIST:
-            if b in d: return True
         if d.endswith(('.tw', '.cn', '.sg', '.mo')): return True
         if '.tw.' in d or '.cn.' in d: return True
+        
     return False
 
 def parse_news_date(date_str):
@@ -224,7 +228,7 @@ def fetch_bluesky(query):
     return results
 
 # ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V15.1", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V15.2", layout="wide")
 
 with st.sidebar:
     st.markdown("### 🌐 功能選單")
@@ -233,7 +237,7 @@ with st.sidebar:
         st.info("ℹ️ Matters, Bluesky是來自各地研究員、記者、評論員等，撰寫評論和分析的去中心化社交平台")
 
 if "新聞搜尋" in app_mode:
-    st.title("🌐 新聞搜尋模式 V15.1")
+    st.title("🌐 新聞搜尋模式 V15.2")
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
     query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
@@ -280,7 +284,6 @@ if "新聞搜尋" in app_mode:
                 ai_news_box = st.empty()
                 with st.spinner("🤖 AI正在閱讀資料和分析中..."):
                     try:
-                        # V15.1 使用修復後的模型路徑
                         model = genai.GenerativeModel(available_model_path)
                         context = "\n".join([f"[{a['source']}] {a['title']}" for a in res[:25]])
                         safe = {cat: HarmBlockThreshold.BLOCK_NONE for cat in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT]}
@@ -312,7 +315,7 @@ if "新聞搜尋" in app_mode:
 
 else:
     # ==================== 社交分析模式 ====================
-    st.title("🔵 社交平台深度搜尋與分析 V15.1")
+    st.title("🔵 社交平台深度搜尋與分析 V15.2")
     col_i, col_t, col_s = st.columns([2, 1, 1])
     with col_i: s_query = st.text_input("搜尋關鍵字", key="s_input")
     with col_t: t_filter = st.selectbox("時間範圍", ["全部", "最近 24 小時", "最近 7 天"])
