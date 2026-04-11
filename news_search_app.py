@@ -39,7 +39,7 @@ for k in state_keys:
     if k not in st.session_state:
         st.session_state[k] = 0 if 'page' in k or 'count' in k else ([] if 'results' in k else None)
 
-# ==================== 1. 新聞核心引擎 (V13.5 優化) ====================
+# ==================== 1. 新聞核心引擎 (V13.6 強效防滲透) ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -65,10 +65,26 @@ def parse_news_date(date_str):
 
 def fetch_rss_news(url, start_hkt, end_hkt, white_list, region):
     articles = []
+    # V13.6: 終極防滲透黑名單（針對沒有明顯國家網域的海外媒體）
     exclusions = []
-    if region == "香港媒體": exclusions = [".tw", ".mo", ".cn", "macau", "macao", "macaodaily", "taiwan"]
-    elif region == "台灣/世界華文": exclusions = [".hk", ".mo", ".cn", "hongkong", "macau"]
-    elif region == "中國大陸": exclusions = [".tw", ".hk", ".mo", "taiwan", "hongkong"]
+    if region == "香港媒體": 
+        exclusions = [
+            ".tw", ".mo", ".cn", "macau", "macao", "macaodaily", "taiwan", 
+            "udn.com", "chinatimes", "ltn.com", "ettoday", "setn", "tvbs", "cna.com", 
+            "zaobao", "8world", "yahoo", "ntdtv", "rfa", "voa", "epochtimes.com/b5", 
+            "聯合新聞網", "中時", "自由時報", "中央社", "東森", "三立", "早報", "星洲", "新唐人", "大紀元台灣"
+        ]
+    elif region == "台灣/世界華文": 
+        exclusions = [
+            ".hk", ".mo", ".cn", "hongkong", "macau", 
+            "hk01", "scmp", "rthk", "tvb", "hket", "mingpao", "stheadline", "bastillepost",
+            "香港", "澳門", "新華", "人民網", "央視"
+        ]
+    elif region == "中國大陸": 
+        exclusions = [
+            ".tw", ".hk", ".mo", "taiwan", "hongkong", 
+            "udn", "chinatimes", "ltn", "hk01", "appledaily", "rfa", "voa", "bbc", "nytimes"
+        ]
 
     try:
         feed = feedparser.parse(url, request_headers={'User-Agent': 'Mozilla/5.0'})
@@ -77,14 +93,21 @@ def fetch_rss_news(url, start_hkt, end_hkt, white_list, region):
                 dt_hkt = datetime.fromtimestamp(mktime(e.published_parsed)).replace(tzinfo=timezone.utc).astimezone(HKT)
             except: continue
             if not (start_hkt <= dt_hkt <= end_hkt): continue
+            
             link = e.get('link', '')
             source_url = e.get('source', {}).get('href', '')
             source_title = e.get('source', {}).get('title', 'Google News RSS')
+            
             is_white = check_white(link, source_url, white_list)
+            
+            # 如果不在白名單內，啟動嚴格審查機制
             if not is_white:
                 domain = urlparse(link).netloc.lower()
                 source_title_lower = source_title.lower()
-                if any(ex in domain or ex in source_title_lower for ex in exclusions): continue
+                # 只要網域或來源標題命中任何一個黑名單字眼，直接拋棄
+                if any(ex in domain or ex in source_title_lower for ex in exclusions): 
+                    continue
+                    
             articles.append({
                 "title": e.get('title', '').rsplit(" - ", 1)[0], "link": link, 
                 "source": source_title, "pub_str": dt_hkt.strftime("%Y-%m-%d %H:%M"), 
@@ -94,15 +117,12 @@ def fetch_rss_news(url, start_hkt, end_hkt, white_list, region):
     return articles
 
 def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list):
-    """V13.5: 完全採用 Lab Test 成功的 json payload 與分頁模式"""
     if not serper_key: return []
     all_results = []
     headers = {"X-API-KEY": serper_key, "Content-Type": "application/json"}
     
-    # 使用 Lab Test 證實有效的搜尋語法
     search_q = f"{query} after:{start_date}"
     
-    # 1. 搜尋新聞 (翻 8 頁)
     news_url = "https://google.serper.dev/news"
     for page in range(1, 9):
         payload = {"q": search_q, "gl": gl, "hl": hl, "page": page}
@@ -118,10 +138,9 @@ def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list):
                     "is_white": check_white(i.get('link', ''), '', white_list),
                     "fetch_type": "serper_news"
                 })
-            time.sleep(0.3) # 參考 Lab Test 的緩衝
+            time.sleep(0.3) 
         except: break
 
-    # 2. 全網補充包
     search_url = "https://google.serper.dev/search"
     try:
         res = requests.post(search_url, headers=headers, json={"q": search_q, "gl": gl, "hl": hl}, timeout=12).json()
@@ -175,15 +194,15 @@ def fetch_bluesky(query):
     return results
 
 # ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V13.5", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V13.6", layout="wide")
 
 with st.sidebar:
     st.markdown("### 🌐 功能選單")
     app_mode = st.radio("請選擇模式：", ["新聞搜尋模式", "去中心化社交平台 Matters, Bluesky搜尋與分析"])
 
 if "新聞搜尋" in app_mode:
-    st.title("🌐 新聞搜尋模式 V13.5")
-    if not serper_key: st.warning("⚠️ 系統未偵測到 `SERPER_API_KEY`。")
+    st.title("🌐 新聞搜尋模式 V13.6")
+    if not serper_key: st.warning("⚠️ 系統未偵測到 `SERPER_API_KEY`，請檢查 Streamlit Secrets 設定。")
         
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
     query = st.text_input("關鍵字", placeholder="例如：李家超")
@@ -205,7 +224,7 @@ if "新聞搜尋" in app_mode:
             rss_url = f"https://news.google.com/rss/search?q={quote_plus(query)}+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl.upper()}&ceid={ceid}"
             articles_rss = fetch_rss_news(rss_url, start_hkt, end_hkt, white_list, region)
             
-            # 抓取 Serper (Lab Test 版)
+            # 抓取 Serper
             articles_ext = fetch_serper_combined(query, start_date, end_date, gl, hl, white_list)
             st.session_state.serper_raw_count = len(articles_ext)
             
@@ -247,7 +266,6 @@ if "新聞搜尋" in app_mode:
             curr_data = res[start_idx : end_idx]
             
             for n in curr_data:
-                # V13.5 Icon: ✅ (白名單), 🔴 (RSS), 🔼 (Serper), 🌐 (補充)
                 if n['is_white']: icon = "✅"
                 elif n.get('fetch_type') == 'rss': icon = "🔴"
                 elif n.get('fetch_type') == 'serper_news': icon = "🔼"
@@ -264,7 +282,7 @@ if "新聞搜尋" in app_mode:
             if st.session_state.news_page < total_pages-1 and c2.button("下一頁 ➡️"): st.session_state.news_page += 1; st.rerun()
 
 else:
-    # ==================== 社交分析模式 (維持穩定邏輯) ====================
+    # ==================== 社交分析模式 ====================
     st.title("🔵 社交平台深度搜尋與分析")
     col_i, col_t, col_s = st.columns([2, 1, 1])
     with col_i: s_query = st.text_input("搜尋關鍵字", key="s_input")
