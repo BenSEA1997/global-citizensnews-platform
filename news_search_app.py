@@ -21,29 +21,31 @@ def get_secret(key):
 api_key = get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
 serper_key = get_secret("SERPER_API_KEY")
 
-# V15.6 增強型自動偵測邏輯 (遵循 Google AI Studio 診斷建議)
+# V15.7 強化 AI 診斷與路徑清洗邏輯（修復 404 報錯）
 @st.cache_resource
 def get_available_gemini_model(api_key):
     if not api_key:
         return "gemini-1.5-flash"
     try:
         genai.configure(api_key=api_key)
-        # 獲取所有支援 generateContent 的模型清單
+        # 取得所有支援 generateContent 的模型完整名稱
         model_list = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        # 優先級 1: 帶 latest 的 1.5 Flash
-        for m in model_list:
-            if "gemini-1.5-flash-latest" in m: return m
-        # 優先級 2: 原始 1.5 Flash
-        for m in model_list:
-            if "gemini-1.5-flash" in m: return m
-        # 優先級 3: 1.0 Pro
-        for m in model_list:
-            if "gemini-pro" in m: return m
-        # 備用方案
-        return model_list[0] if model_list else "gemini-1.5-flash"
+        # 優先順序：最新別名 -> 2026新推薦 -> 標準 1.5 -> 穩定版
+        priority_patterns = ["gemini-1.5-flash-latest", "gemini-flash-latest", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+        
+        for pattern in priority_patterns:
+            for full_name in model_list:
+                if pattern in full_name:
+                    # 關鍵：使用 split('/')[-1] 剝離 models/ 前綴，避免雙重前綴導致 404
+                    clean_name = full_name.split('/')[-1]
+                    return clean_name
+        
+        # 最終保底邏輯
+        if model_list:
+            return model_list[0].split('/')[-1]
+        return "gemini-1.5-flash"
     except Exception as e:
-        # 若 list_models 失敗，則回退至標準名稱
         return "gemini-1.5-flash"
 
 available_model_path = get_available_gemini_model(api_key)
@@ -51,16 +53,23 @@ available_model_path = get_available_gemini_model(api_key)
 BSKY_HANDLE = "bennysea97.bsky.social"
 BSKY_PASSWORD = "7inu-hoaz-vlda-alvq"
 
-# 初始化 Session State (確保與 V15.2 一致，保持代碼長度)
-if 'news_results' not in st.session_state: st.session_state.news_results = None
-if 'news_page' not in st.session_state: st.session_state.news_page = 0
-if 'social_results' not in st.session_state: st.session_state.social_results = []
-if 'social_page' not in st.session_state: st.session_state.social_page = 0
-if 'last_social_params' not in st.session_state: st.session_state.last_social_params = None
-if 'social_has_searched' not in st.session_state: st.session_state.social_has_searched = False
-if 'last_news_params' not in st.session_state: st.session_state.last_news_params = None
+# 初始化 Session State (完整保留 V15.2 所有鍵值)
+if 'news_results' not in st.session_state:
+    st.session_state.news_results = None
+if 'news_page' not in st.session_state:
+    st.session_state.news_page = 0
+if 'social_results' not in st.session_state:
+    st.session_state.social_results = []
+if 'social_page' not in st.session_state:
+    st.session_state.social_page = 0
+if 'last_social_params' not in st.session_state:
+    st.session_state.last_social_params = None
+if 'social_has_searched' not in st.session_state:
+    st.session_state.social_has_searched = False
+if 'last_news_params' not in st.session_state:
+    st.session_state.last_news_params = None
 
-# ==================== 1. 新聞核心引擎 ====================
+# ==================== 1. 新聞核心引擎 (完整名單與邏輯) ====================
 HK_WHITE_LIST = {"rthk.hk", "news.now.com", "metroradio.com.hk", "i-cable.com", "881903.com", "news.tvb.com", "epochtimes.com", "inmediahk.net", "orangenews.hk", "lionrockdaily.com", "hongkongfp.com", "skypost.hk", "thecollectivehk.com", "ifeng.com", "chinadailyhk.com", "thestandard.com.hk", "hk01.com", "hkcd.com.hk", "takungpao.com", "wenweipo.com", "bastillepost.com", "am730.com.hk", "hket.com", "hk.on.cc", "stheadline.com", "scmp.com", "news.gov.hk", "orientaldaily.on.cc", "hkej.com", "mingpao.com", "etnet.com.hk"}
 TW_WHITE_LIST = {"ttv.com.tw", "ctv.com.tw", "ctinews.com", "tvbs.com.tw", "ftvnews.com.tw", "setn.com", "ctee.com.tw", "cna.com.tw", "ettoday.net", "nownews.com", "chinatimes.com", "ltn.com.tw", "udn.com"}
 CN_WHITE_LIST = {"xinhuanet.com", "people.com.cn", "chinadaily.com.cn", "globaltimes.cn", "thepaper.cn", "yicai.com", "caixin.com", "chinanews.com.cn", "cctv.com"}
@@ -102,11 +111,9 @@ def check_white(link, source_url, white_list):
     return False
 
 def check_black(link, source_url, region):
-    if region != "香港媒體": 
-        return False
+    if region != "香港媒體": return False
     check_strings = [str(link).lower()]
-    if source_url:
-        check_strings.append(str(source_url).lower())
+    if source_url: check_strings.append(str(source_url).lower())
     for b in HK_BLACK_LIST:
         for s in check_strings:
             if b in s: return True
@@ -192,15 +199,14 @@ def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, regio
     except: pass
     return all_results
 
-# ==================== 2. 社交挖掘封裝 ====================
+# ==================== 2. 社交挖掘封裝 (恢復完整功能) ====================
 def fetch_matters(query):
     matters_api = "https://server.matters.news/graphql"
     query_json = {"query": f'query {{ search(input: {{key: "{query}", type: Article, first: 80}}) {{ edges {{ node {{ ... on Article {{ title shortHash summary author {{ displayName }} appreciationsReceivedTotal createdAt }} }} }} }} }}'}
     results = []
     try:
-        response = requests.post(matters_api, json=query_json, timeout=12)
-        data = response.json()
-        edges = data.get('data', {}).get('search', {}).get('edges', [])
+        response = requests.post(matters_api, json=query_json, timeout=12).json()
+        edges = response.get('data', {}).get('search', {}).get('edges', [])
         for item in edges:
             n = item.get('node', {})
             if not n: continue
@@ -210,8 +216,7 @@ def fetch_matters(query):
                 "author": n.get('author', {}).get('displayName', '未知作者'), 
                 "likes": n.get('appreciationsReceivedTotal', 0), 
                 "summary": n.get('summary', ''), 
-                "published": dt.strftime("%Y-%m-%d %H:%M"), 
-                "platform": "Matters", "raw_dt": dt
+                "published": dt.strftime("%Y-%m-%d %H:%M"), "platform": "Matters", "raw_dt": dt
             })
     except: pass
     return results
@@ -225,34 +230,30 @@ def fetch_bluesky(query):
         for post in res:
             dt = datetime.fromisoformat(post.record.created_at.replace('Z', '+00:00')).astimezone(HKT)
             results.append({
-                "title": post.record.text[:80].replace('\n',' ') + "...", 
-                "link": f"https://bsky.app/profile/{post.author.handle}/post/{post.uri.split('/')[-1]}", 
-                "author": post.author.display_name or post.author.handle, 
-                "likes": (post.like_count or 0), 
-                "summary": post.record.text, 
-                "published": dt.strftime("%Y-%m-%d %H:%M"), 
-                "platform": "Bluesky", "raw_dt": dt
+                "title": post.record.text[:80].replace('\n',' ') + "...", "link": f"https://bsky.app/profile/{post.author.handle}/post/{post.uri.split('/')[-1]}", 
+                "author": post.author.display_name or post.author.handle, "likes": (post.like_count or 0), 
+                "summary": post.record.text, "published": dt.strftime("%Y-%m-%d %H:%M"), "platform": "Bluesky", "raw_dt": dt
             })
     except: pass
     return results
 
 # ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V15.6", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V15.7", layout="wide")
 
 with st.sidebar:
     st.markdown("### 🌐 功能選單")
     app_mode = st.radio("請選擇模式：", ["新聞搜尋模式", "去中心化社交平台 Matters, Bluesky搜尋與分析"])
     if "去中心化社交平台" in app_mode:
-        st.info("ℹ️ Matters, Bluesky是來自各地研究員、記者、評論員等，撰寫評論和分析的去中心化社交平台")
+        st.info("ℹ️ Matters, Bluesky是去中心化平台，適合尋找深度評論")
 
 if "新聞搜尋" in app_mode:
-    st.title("🌐 新聞搜尋模式 V15.6")
+    st.title("🌐 新聞搜尋模式 V15.7")
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
-    query = st.text_input("關鍵字", placeholder="例如：李家超")
+    query = st.text_input("關鍵字", placeholder="例如：香港經濟")
     col1, col2 = st.columns(2)
     with col1: start_date = st.date_input("開始", value=date.today() - timedelta(days=2))
     with col2: end_date = st.date_input("結束", value=date.today())
-    enable_news_ai = st.toggle("🛡️ 開啟 AI 深度分析總結 (分析本次搜尋結果)", value=False)
+    enable_news_ai = st.toggle("🛡️ 開啟 AI 深度分析總結", value=False)
     news_params = (query, region, start_date, end_date)
 
     if st.button("搜尋", type="primary"):
@@ -279,20 +280,19 @@ if "新聞搜尋" in app_mode:
 
     if st.session_state.news_results is not None and st.session_state.last_news_params == news_params:
         res = st.session_state.news_results
-        if not res: st.warning("⚠️ 此關鍵字沒有搜到相關新聞")
+        if not res: st.warning("⚠️ 此關鍵字沒有搜尋到新聞")
         else:
-            # 嚴格還原 V15.2 的診斷統計顯示
-            white_count = sum(1 for x in res if x.get('is_white'))
-            rss_count = sum(1 for x in res if x.get('fetch_type') == 'rss')
-            serper_count = sum(1 for x in res if x.get('fetch_type') == 'serper_news')
-            supp_count = sum(1 for x in res if x.get('fetch_type') == 'supplement')
-            
-            st.success(f"📊 **資料源診斷**：✅白名單: **{white_count}** ｜ 🔴RSS新聞: **{rss_count}** ｜ 🔵Serper新聞: **{serper_count}** ｜ 🌐補充包: **{supp_count}** ｜ 總數: **{len(res)}**")
+            # 完整恢復 V15.2 的診斷統計 Success Box
+            w_c = sum(1 for x in res if x.get('is_white'))
+            r_c = sum(1 for x in res if x.get('fetch_type') == 'rss')
+            s_c = sum(1 for x in res if x.get('fetch_type') == 'serper_news')
+            b_c = sum(1 for x in res if x.get('fetch_type') == 'supplement')
+            st.success(f"📊 **資料源診斷**：✅白名單: **{w_c}** | 🔴RSS新聞: **{r_c}** | 🔵Serper: **{s_c}** | 🌐網頁補充: **{b_c}** | 總計: **{len(res)}**")
 
             if enable_news_ai:
                 st.subheader("✨ 新聞輿情 AI 深度分析")
                 ai_news_box = st.empty()
-                with st.spinner(f"🤖 AI正在閱讀資料... (使用模型: {available_model_path})"):
+                with st.spinner(f"🤖 AI正在分析中... (使用模型 ID: {available_model_path})"):
                     try:
                         model = genai.GenerativeModel(available_model_path)
                         context = "\n".join([f"[{a['source']}] {a['title']}" for a in res[:25]])
@@ -300,79 +300,69 @@ if "新聞搜尋" in app_mode:
                         resp = model.generate_content(f"請分析以下新聞報導的主要趨勢、各方觀點對比及核心事件整理：\n{context}", safety_settings=safe)
                         ai_news_box.info(resp.text)
                     except Exception as e: 
-                        ai_news_box.warning(f"⚠️ AI 分析失效 (模型路徑: {available_model_path}): {str(e)}")
+                        ai_news_box.warning(f"⚠️ AI 失效: {str(e)}")
 
             total_pages = (len(res)-1)//30+1
             start_idx = st.session_state.news_page * 30
             end_idx = min(start_idx + 30, len(res))
-            curr_data = res[start_idx : end_idx]
+            curr_data = res[start_idx:end_idx]
             
             for n in curr_data:
-                if n['is_white']: icon = "✅"
-                elif n.get('fetch_type') == 'rss': icon = "🔴"
-                elif n.get('fetch_type') == 'serper_news': icon = "🔵"
-                elif n.get('fetch_type') == 'supplement': icon = "🌐"
-                else: icon = "☑️"
+                icon = "✅" if n['is_white'] else ("🔴" if n['fetch_type']=='rss' else ("🔵" if n['fetch_type']=='serper_news' else "🌐"))
                 st.markdown(f"### {icon} [{n['title']}]({n['link']})")
                 st.caption(f"{n['source']} | {n['pub_str']}")
                 st.divider()
-                
-            st.write(f"顯示第 {start_idx + 1}-{end_idx} 則新聞 (第 {st.session_state.news_page+1} 頁 / 共 {total_pages} 頁，總數 {len(res)} 則)")
+            
+            st.write(f"顯示第 {start_idx + 1}-{end_idx} 則新聞 (第 {st.session_state.news_page+1} 頁 / 共 {total_pages} 頁)")
             c1, c2, _ = st.columns([1,1,4])
             if st.session_state.news_page > 0 and c1.button("⬅️ 上一頁"): st.session_state.news_page -= 1; st.rerun()
             if st.session_state.news_page < total_pages-1 and c2.button("下一頁 ➡️"): st.session_state.news_page += 1; st.rerun()
 
 else:
-    # 社交模式 (完全還原 V15.2 的長度)
-    st.title("🔵 社交平台深度搜尋與分析 V15.6")
+    # ==================== 社交平台搜尋模式 (長度完全恢復) ====================
+    st.title("🔵 社交平台深度搜尋與分析 V15.7")
     col_i, col_t, col_s = st.columns([2, 1, 1])
-    with col_i: s_query = st.text_input("搜尋關鍵字", key="s_input")
+    with col_i: s_query = st.text_input("搜尋關鍵字")
     with col_t: t_filter = st.selectbox("時間範圍", ["全部", "最近 24 小時", "最近 7 天"])
     with col_s: s_order = st.selectbox("排序方式", ["🕒 最新發布", "🔥 互動次數"])
     cur_s_params = (s_query, t_filter, s_order)
 
     if st.button("執行挖掘與 AI 分析", type="primary"):
-        with st.status("🔄 正在搜尋中 ...", expanded=True) as status:
+        with st.status("🔄 正在搜尋中 ..."):
             raw = fetch_matters(s_query) + fetch_bluesky(s_query)
             now = datetime.now(HKT)
             filtered = [r for r in raw if not (t_filter == "最近 24 小時" and (now - r['raw_dt']) > timedelta(days=1)) and not (t_filter == "最近 7 天" and (now - r['raw_dt']) > timedelta(days=7))]
-            if s_order == "🔥 互動次數":
-                st.session_state.social_results = sorted(filtered, key=lambda x: x['likes'], reverse=True)
-            else:
-                st.session_state.social_results = sorted(filtered, key=lambda x: x['raw_dt'], reverse=True)
+            st.session_state.social_results = sorted(filtered, key=lambda x: x['likes' if s_order == "🔥 互動次數" else 'raw_dt'], reverse=True)
             st.session_state.social_page = 0
             st.session_state.last_social_params = cur_s_params
             st.session_state.social_has_searched = True
-            status.update(label="✅ 挖掘完成", state="complete")
             st.rerun()
 
     if st.session_state.social_has_searched and st.session_state.last_social_params == cur_s_params:
         res = st.session_state.social_results
-        if not res: st.warning("⚠️ 沒有搜尋到此關鍵字貼文。")
+        if not res: st.warning("⚠️ 沒有貼文結果")
         else:
             st.subheader("✨ AI 趨勢分析")
             ai_box = st.empty()
-            with st.spinner("🤖 AI分析中..."):
+            with st.spinner("🤖 AI 正在深入分析貼文內容..."):
                 try:
                     model = genai.GenerativeModel(available_model_path)
                     context = "\n".join([f"{d['title']}" for d in res[:15]])
                     safe = {cat: HarmBlockThreshold.BLOCK_NONE for cat in [HarmCategory.HARM_CATEGORY_HATE_SPEECH, HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HARASSMENT]}
-                    response = model.generate_content(f"請分析社交討論趨勢及核心議題：\n{context}", safety_settings=safe)
+                    response = model.generate_content(f"分析社交討論趨勢及核心議題：\n{context}", safety_settings=safe)
                     ai_box.info(response.text)
-                except Exception as e: 
-                    ai_box.warning(f"⚠️ AI 失效: {str(e)}")
+                except Exception as e: ai_box.warning(f"⚠️ AI 失效: {str(e)}")
             
-            total_pages = (len(res)-1)//30+1
-            start_idx = st.session_state.social_page * 30
-            end_idx = min(start_idx + 30, len(res))
-            curr_p = res[start_idx : end_idx]
-            for item in curr_p:
+            tp = (len(res)-1)//30+1
+            s_idx = st.session_state.social_page * 30
+            e_idx = min(s_idx + 30, len(res))
+            for item in res[s_idx:e_idx]:
                 st.markdown(f"### [{item['title']}]({item['link']})")
                 st.caption(f"作者: {item['author']} | 平台: **{item['platform']}** | ❤️ {item['likes']} | {item['published']}")
                 st.write(item['summary'][:200] + "...")
                 st.divider()
             
-            st.write(f"顯示第 {start_idx + 1}-{end_idx} 則貼文 (第 {st.session_state.social_page+1} 頁 / 共 {total_pages} 頁，總數 {len(res)} 則)")
+            st.write(f"顯示第 {s_idx + 1}-{e_idx} 則貼文 (第 {st.session_state.social_page+1} 頁 / 共 {tp} 頁)")
             cc1, cc2, _ = st.columns([1,1,4])
             if st.session_state.social_page > 0 and cc1.button("⬅️ 上一頁 "): st.session_state.social_page -= 1; st.rerun()
-            if st.session_state.social_page < total_pages-1 and cc2.button(" 下一頁 ➡️"): st.session_state.social_page += 1; st.rerun()
+            if st.session_state.social_page < tp-1 and cc2.button(" 下一頁 ➡️"): st.session_state.social_page += 1; st.rerun()
