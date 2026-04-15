@@ -88,11 +88,12 @@ HK_BLACK_LIST = {
     "ctinews.com", "worldjournal.com", "cw.com.tw", "tdm.com.mo", "gvm.com.tw", "nownews.com", "youtube.com",
     "sinchew.com.my", "macaodaily.com", "threads.com", "chinatimes.com", "turnnewsapp.com",
     "zh-yue.wikipedia.org", "big5.cctv.com", "zh.wikipedia.org",
-    # --- V16.1 新增黑名單 ---
     "taiwanhot.net", "n.yam.com", "mirrormedia.mg", "news.nextapple.com", "lnanews.com", 
     "yeeyi.com", "m.sohu.com", "exmoo.com", "guangming.com.my", "mirrordaily.news", 
     "facebook.com", "finance.eastmoney.com", "stockstar.com", "entrevue.fr", 
-    "aboluowang.com", "8world.com", "chinapress.com.my"
+    "aboluowang.com", "8world.com", "chinapress.com.my",
+    # --- V16.2 新增黑名單 ---
+    "sohu.com", "news.bioon.com", "instagram.com"
 }
 
 def process_relative_date(date_str):
@@ -132,7 +133,7 @@ def check_black(link, source_url, region):
         try: domains.append(urlparse(s).netloc.lower())
         except: pass
 
-    # 1. 跨區域黑名單過濾 (V16.1)
+    # 1. 跨區域黑名單過濾
     if region == "香港媒體":
         for b in HK_BLACK_LIST:
             for s in check_strings:
@@ -157,10 +158,17 @@ def check_black(link, source_url, region):
             for tw in TW_WHITE_LIST:
                 if tw in d: return True
 
-    # 2. 自動判別規則 Suffix Filtering (V16.1 加入 .my, .au, .fr)
+    # 2. 自動判別規則 Suffix Filtering (V16.2 地區感知)
     for d in domains:
-        if d.endswith(('.tw', '.cn', '.sg', '.mo', '.my', '.au', '.fr')): return True
-        if '.tw.' in d or '.cn.' in d: return True
+        if region == "香港媒體":
+            if d.endswith(('.tw', '.cn', '.sg', '.mo', '.my', '.au', '.fr')): return True
+            if '.tw.' in d or '.cn.' in d: return True
+        elif region == "台灣/世界華文":
+            if d.endswith(('.hk', '.cn', '.mo')): return True
+            if '.hk.' in d or '.cn.' in d: return True
+        elif region == "中國大陸":
+            if d.endswith(('.hk', '.tw')): return True
+            if '.hk.' in d or '.tw.' in d: return True
     
     return False
 
@@ -195,14 +203,16 @@ def fetch_rss_news(url, start_hkt, end_hkt, white_list, region):
     except: pass
     return articles
 
-def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, region):
+def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, region, location):
     if not serper_key: return []
     all_results = []
     headers = {'X-API-KEY': serper_key, 'Content-Type': 'application/json'}
     news_url = "https://google.serper.dev/news"
     search_q = f"{query} after:{start_date} before:{end_date + timedelta(days=1)}"
+    
+    # News Search
     for page in range(1, 9):
-        payload = {"q": search_q, "gl": gl, "hl": hl, "page": page}
+        payload = {"q": search_q, "gl": gl, "hl": hl, "location": location, "page": page}
         try:
             res = requests.post(news_url, headers=headers, json=payload, timeout=10).json()
             items = res.get('news', [])
@@ -220,17 +230,31 @@ def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, regio
                 })
             time.sleep(0.5)
         except: break
+        
+    # Organic Search (補充包 - V16.2 修正)
     search_url = "https://google.serper.dev/search"
-    payload_search = {"q": search_q, "gl": gl, "hl": hl, "page": 1}
+    payload_search = {"q": search_q, "gl": gl, "hl": hl, "location": location, "page": 1}
     try:
         res = requests.post(search_url, headers=headers, json=payload_search, timeout=10).json()
         for i in res.get('organic', []):
             link = i.get('link', '')
             if check_black(link, '', region): continue
+            
+            # 擷取日期：沒有日期或解析失敗(2000年)時，賦予當前時間避免沉底
+            dt = parse_news_date(i.get('date', ''))
+            if dt.year == 2000:
+                dt = datetime.now(HKT)
+                
+            # 擷取媒體名稱：用網域替代死板的「Google 網頁補充」
+            netloc = ""
+            try: netloc = urlparse(link).netloc.lower()
+            except: pass
+            source_name = netloc if netloc else "網頁補充結果"
+
             all_results.append({
                 "title": i.get('title', ''), "link": link,
-                "source": "Google 網頁補充", "pub_str": "搜尋引擎索引",
-                "raw_dt": datetime(2000, 1, 1, tzinfo=HKT),
+                "source": source_name, "pub_str": dt.strftime("%Y-%m-%d %H:%M"),
+                "raw_dt": dt,
                 "is_white": check_white(link, '', white_list),
                 "fetch_type": "supplement"
             })
@@ -282,7 +306,7 @@ def fetch_bluesky(query):
     return results
 
 # ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V16.1", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V16.2", layout="wide")
 
 with st.sidebar:
     st.markdown("### 🌐 功能選單")
@@ -291,7 +315,7 @@ with st.sidebar:
         st.info("ℹ️ Matters, Bluesky是來自各地研究員、記者、評論員等，撰寫評論和分析的去中心化社交平台")
 
 if "新聞搜尋" in app_mode:
-    st.title("🌐 新聞搜尋模式 V16.1")
+    st.title("🌐 新聞搜尋模式 V16.2")
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
     query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
@@ -305,15 +329,22 @@ if "新聞搜尋" in app_mode:
             if not query: st.stop()
             start_hkt = HKT.localize(datetime.combine(start_date, datetime.min.time()))
             end_hkt = HKT.localize(datetime.combine(end_date, datetime.max.time()))
-            mapping = {"香港媒體": (HK_WHITE_LIST, "hk", "zh-hk", "HK:zh-Hant"), "台灣/世界華文": (TW_WHITE_LIST, "tw", "zh-tw", "TW:zh-Hant"), "環球英文媒體": (ENGLISH_GLOBAL_LIST, "us", "en", "US:en"), "中國大陸": (CN_WHITE_LIST, "cn", "zh-cn", "CN:zh-Hans")}
-            white_list, gl, hl, ceid = mapping[region]
+            
+            # V16.2 加入了 location 參數
+            mapping = {
+                "香港媒體": (HK_WHITE_LIST, "hk", "zh-hk", "HK:zh-Hant", "Hong Kong"), 
+                "台灣/世界華文": (TW_WHITE_LIST, "tw", "zh-tw", "TW:zh-Hant", "Taiwan"), 
+                "環球英文媒體": (ENGLISH_GLOBAL_LIST, "us", "en", "US:en", "United States"), 
+                "中國大陸": (CN_WHITE_LIST, "cn", "zh-cn", "CN:zh-Hans", "China")
+            }
+            white_list, gl, hl, ceid, loc = mapping[region]
             
             rss_url = f"https://news.google.com/rss/search?q={quote_plus(query)}+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl.upper()}&ceid={ceid}"
             articles_rss = fetch_rss_news(rss_url, start_hkt, end_hkt, white_list, region)
-            articles_ext = fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, region)
+            articles_ext = fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, region, loc)
             
             unique = {}
-            seen_titles = set() # V16.1 標題去重
+            seen_titles = set()
             for a in (articles_rss + articles_ext):
                 t = a['title'].strip()
                 if a['link'] not in unique and t not in seen_titles:
@@ -371,7 +402,7 @@ if "新聞搜尋" in app_mode:
             if st.session_state.news_page < total_pages-1 and c2.button("下一頁 ➡️"): st.session_state.news_page += 1; st.rerun()
 
 else:
-    st.title("🔵 社交平台深度搜尋與分析 V16.1")
+    st.title("🔵 社交平台深度搜尋與分析 V16.2")
     col_i, col_t, col_s = st.columns([2, 1, 1])
     with col_i: s_query = st.text_input("搜尋關鍵字", key="s_input")
     with col_t: t_filter = st.selectbox("時間範圍", ["全部", "最近 24 小時", "最近 7 天"])
