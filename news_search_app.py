@@ -21,7 +21,7 @@ def get_secret(key):
 api_key = get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
 serper_key = get_secret("SERPER_API_KEY")
 
-# ==================== V15.7 最終修正版：AI 模型自動偵測 ====================
+# 恢復 V16.2 完整的診斷邏輯，不進行簡化
 @st.cache_resource
 def get_available_gemini_model(api_key):
     if not api_key:
@@ -34,7 +34,7 @@ def get_available_gemini_model(api_key):
             if 'generateContent' in m.supported_generation_methods
         ]
         
-        # 顯示診斷資訊
+        # 恢復診斷資訊輸出
         debug_info = f"🔧 偵測到 {len(model_list)} 個可用模型\n" + "\n".join(model_list[:10])
         st.sidebar.info(debug_info[:500] + ("..." if len(model_list) > 10 else ""))
         
@@ -92,13 +92,14 @@ HK_BLACK_LIST = {
     "yeeyi.com", "m.sohu.com", "exmoo.com", "guangming.com.my", "mirrordaily.news", 
     "facebook.com", "finance.eastmoney.com", "stockstar.com", "entrevue.fr", 
     "aboluowang.com", "8world.com", "chinapress.com.my",
-    # --- V16.2 新增黑名單 ---
-    "sohu.com", "news.bioon.com", "instagram.com"
+    "sohu.com", "news.bioon.com", "instagram.com",
+    # --- V16.3 新增黑名單 ---
+    "163.com"
 }
 
 def process_relative_date(date_str):
     now = datetime.now(HKT)
-    s = date_str.lower()
+    s = str(date_str).lower()
     try:
         match = re.search(r'(\d+)', s)
         if not match: return None
@@ -158,7 +159,7 @@ def check_black(link, source_url, region):
             for tw in TW_WHITE_LIST:
                 if tw in d: return True
 
-    # 2. 自動判別規則 Suffix Filtering (V16.2 地區感知)
+    # 2. 自動判別規則 Suffix Filtering
     for d in domains:
         if region == "香港媒體":
             if d.endswith(('.tw', '.cn', '.sg', '.mo', '.my', '.au', '.fr')): return True
@@ -203,16 +204,17 @@ def fetch_rss_news(url, start_hkt, end_hkt, white_list, region):
     except: pass
     return articles
 
-def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, region, location):
+def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, region):
     if not serper_key: return []
     all_results = []
     headers = {'X-API-KEY': serper_key, 'Content-Type': 'application/json'}
     news_url = "https://google.serper.dev/news"
     search_q = f"{query} after:{start_date} before:{end_date + timedelta(days=1)}"
     
-    # News Search
+    # 1. News Search
     for page in range(1, 9):
-        payload = {"q": search_q, "gl": gl, "hl": hl, "location": location, "page": page}
+        # V16.3 移除 location 參數
+        payload = {"q": search_q, "gl": gl, "hl": hl, "page": page}
         try:
             res = requests.post(news_url, headers=headers, json=payload, timeout=10).json()
             items = res.get('news', [])
@@ -221,9 +223,13 @@ def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, regio
                 link = i.get('link', '')
                 if check_black(link, '', region): continue
                 dt = parse_news_date(i.get('date', ''))
+                
+                # V16.3 修正排序問題：無法識別日期的結果直接丟棄
+                if dt.year == 2000: continue
+                
                 all_results.append({
                     "title": i.get('title', ''), "link": link,
-                    "source": i.get('source', 'Google Search'), "pub_str": dt.strftime("%Y-%m-%d %H:%M") if dt.year > 2000 else i.get('date', '歷史存檔'),
+                    "source": i.get('source', 'Google Search'), "pub_str": dt.strftime("%Y-%m-%d %H:%M"),
                     "raw_dt": dt,
                     "is_white": check_white(link, '', white_list),
                     "fetch_type": "serper_news"
@@ -231,23 +237,25 @@ def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, regio
             time.sleep(0.5)
         except: break
         
-    # Organic Search (補充包 - V16.2 修正)
+    # 2. Organic Search (補充包 V16.3 強化)
     search_url = "https://google.serper.dev/search"
-    payload_search = {"q": search_q, "gl": gl, "hl": hl, "location": location, "page": 1}
+    payload_search = {"q": search_q, "gl": gl, "hl": hl, "page": 1}
     try:
         res = requests.post(search_url, headers=headers, json=payload_search, timeout=10).json()
         for i in res.get('organic', []):
             link = i.get('link', '')
+            
+            # V16.3 關鍵修改點 1：補充包必須存在於白名單中才放行 (解決雜訊)
+            if not check_white(link, '', white_list): continue
+            
             if check_black(link, '', region): continue
             
-            # 擷取日期：沒有日期或解析失敗(2000年)時，賦予當前時間避免沉底
+            # V16.3 關鍵修改點 2：無法識別日期的補充包結果直接丟棄 (解決排序)
             dt = parse_news_date(i.get('date', ''))
-            if dt.year == 2000:
-                dt = datetime.now(HKT)
+            if dt.year == 2000: continue
                 
-            # 擷取媒體名稱：用網域替代死板的「Google 網頁補充」
             netloc = ""
-            try: netloc = urlparse(link).netloc.lower()
+            try: netloc = urlparse(link).netloc.lower().replace("www.", "")
             except: pass
             source_name = netloc if netloc else "網頁補充結果"
 
@@ -255,7 +263,7 @@ def fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, regio
                 "title": i.get('title', ''), "link": link,
                 "source": source_name, "pub_str": dt.strftime("%Y-%m-%d %H:%M"),
                 "raw_dt": dt,
-                "is_white": check_white(link, '', white_list),
+                "is_white": True, # 既然已過濾白名單，這裡標記為 True
                 "fetch_type": "supplement"
             })
     except: pass
@@ -306,7 +314,7 @@ def fetch_bluesky(query):
     return results
 
 # ==================== 3. 主介面 UI ====================
-st.set_page_config(page_title="全球 CitizensNews V16.2", layout="wide")
+st.set_page_config(page_title="全球 CitizensNews V16.3", layout="wide")
 
 with st.sidebar:
     st.markdown("### 🌐 功能選單")
@@ -315,7 +323,7 @@ with st.sidebar:
         st.info("ℹ️ Matters, Bluesky是來自各地研究員、記者、評論員等，撰寫評論和分析的去中心化社交平台")
 
 if "新聞搜尋" in app_mode:
-    st.title("🌐 新聞搜尋模式 V16.2")
+    st.title("🌐 新聞搜尋模式 V16.3")
     region = st.radio("區域", ["香港媒體", "台灣/世界華文", "環球英文媒體", "中國大陸"], horizontal=True)
     query = st.text_input("關鍵字", placeholder="例如：李家超")
     col1, col2 = st.columns(2)
@@ -330,18 +338,19 @@ if "新聞搜尋" in app_mode:
             start_hkt = HKT.localize(datetime.combine(start_date, datetime.min.time()))
             end_hkt = HKT.localize(datetime.combine(end_date, datetime.max.time()))
             
-            # V16.2 加入了 location 參數
             mapping = {
-                "香港媒體": (HK_WHITE_LIST, "hk", "zh-hk", "HK:zh-Hant", "Hong Kong"), 
-                "台灣/世界華文": (TW_WHITE_LIST, "tw", "zh-tw", "TW:zh-Hant", "Taiwan"), 
-                "環球英文媒體": (ENGLISH_GLOBAL_LIST, "us", "en", "US:en", "United States"), 
-                "中國大陸": (CN_WHITE_LIST, "cn", "zh-cn", "CN:zh-Hans", "China")
+                "香港媒體": (HK_WHITE_LIST, "hk", "zh-hk", "HK:zh-Hant"), 
+                "台灣/世界華文": (TW_WHITE_LIST, "tw", "zh-tw", "TW:zh-Hant"), 
+                "環球英文媒體": (ENGLISH_GLOBAL_LIST, "us", "en", "US:en"), 
+                "中國大陸": (CN_WHITE_LIST, "cn", "zh-cn", "CN:zh-Hans")
             }
-            white_list, gl, hl, ceid, loc = mapping[region]
+            white_list, gl, hl, ceid = mapping[region]
             
             rss_url = f"https://news.google.com/rss/search?q={quote_plus(query)}+after:{start_date}+before:{end_date + timedelta(days=1)}&hl={hl}&gl={gl.upper()}&ceid={ceid}"
             articles_rss = fetch_rss_news(rss_url, start_hkt, end_hkt, white_list, region)
-            articles_ext = fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, region, loc)
+            
+            # V16.3 fetch_serper_combined 已不接受 location
+            articles_ext = fetch_serper_combined(query, start_date, end_date, gl, hl, white_list, region)
             
             unique = {}
             seen_titles = set()
@@ -354,7 +363,7 @@ if "新聞搜尋" in app_mode:
             st.session_state.news_results = sorted(unique.values(), key=lambda x: x["raw_dt"], reverse=True)
             st.session_state.news_page = 0
             st.session_state.last_news_params = news_params
-            status.update(label=f"✅ 挖掘完成！共獲取 {len(st.session_state.news_results)} 則結果", state="complete")
+            status.update(label=f"✅ 挖掘完成！共獲取 {len(st.session_state.news_results)} 則精確結果", state="complete")
             st.rerun()
 
     if st.session_state.news_results is not None and st.session_state.last_news_params == news_params:
@@ -379,7 +388,7 @@ if "新聞搜尋" in app_mode:
                         resp = model.generate_content(f"請分析以下新聞報導的主要趨勢、各方觀點對比及核心事件整理：\n{context}", safety_settings=safe)
                         ai_news_box.info(resp.text)
                     except Exception as e:
-                        ai_news_box.warning(f"⚠️ AI 分析失效 (模型路徑: {available_model_path}): {str(e)}")
+                        ai_news_box.warning(f"⚠️ AI 分析失效: {str(e)}")
 
             total_pages = (len(res)-1)//30+1
             start_idx = st.session_state.news_page * 30
@@ -387,6 +396,7 @@ if "新聞搜尋" in app_mode:
             curr_data = res[start_idx : end_idx]
             
             for n in curr_data:
+                # 恢復 V16.2 完整的圖標判斷塊
                 if n['is_white']: icon = "✅"
                 elif n.get('fetch_type') == 'rss': icon = "🔴"
                 elif n.get('fetch_type') == 'serper_news': icon = "🔵"
@@ -402,7 +412,7 @@ if "新聞搜尋" in app_mode:
             if st.session_state.news_page < total_pages-1 and c2.button("下一頁 ➡️"): st.session_state.news_page += 1; st.rerun()
 
 else:
-    st.title("🔵 社交平台深度搜尋與分析 V16.2")
+    st.title("🔵 社交平台深度搜尋與分析 V16.3")
     col_i, col_t, col_s = st.columns([2, 1, 1])
     with col_i: s_query = st.text_input("搜尋關鍵字", key="s_input")
     with col_t: t_filter = st.selectbox("時間範圍", ["全部", "最近 24 小時", "最近 7 天"])
